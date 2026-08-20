@@ -2,8 +2,9 @@ import { chromium } from "playwright";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@LilcMarketBrief";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const DRY_RUN = process.env.DRY_RUN === "1";
 
-if (!TOKEN) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
+if (!TOKEN && !DRY_RUN) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
 
 const sources = {
   vix: "https://www.investing.com/indices/volatility-s-p-500",
@@ -103,6 +104,10 @@ function formatReport(results) {
   return `市场六指标日报｜${date}（北京时间）\n\n${blocks.join("\n\n")}\n\n说明：所有数值均为本次直接读取的来源页面显示值；不同网页的更新节奏不同，日期以各页面显示为准。`;
 }
 async function sendTelegram(text) {
+  if (DRY_RUN) {
+    console.log("DRY RUN — Telegram 未发送。\n" + text);
+    return;
+  }
   const response = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -112,7 +117,10 @@ async function sendTelegram(text) {
   if (!response.ok || !result.ok) throw new Error(`Telegram 发送失败：${result.description || response.status}`);
 }
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.CHROME_EXECUTABLE_PATH ? { executablePath: process.env.CHROME_EXECUTABLE_PATH } : {})
+});
 try {
   const raw = {};
   const failures = [];
