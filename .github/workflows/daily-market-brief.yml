@@ -9,15 +9,13 @@ permissions:
   contents: read
 
 jobs:
-  send-report:
+  validate-report:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
     defaults:
       run:
         working-directory: market-six-indicators
     env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: "@LilcMarketBrief"
       TZ: Asia/Shanghai
       CHROME_EXECUTABLE_PATH: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     steps:
@@ -26,4 +24,44 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npm run report
+      - name: Read and validate all six sources
+        run: |
+          set +e
+          REPORT_OUTPUT_FILE=telegram-message.txt npm run report
+          report_status=$?
+          if [ ! -s telegram-message.txt ]; then
+            printf '【市场六指标日报未发送】\n本次未使用估算或替代数据。运行异常：未生成可发送文本；请查看本次 GitHub Actions 日志。' > telegram-message.txt
+          fi
+          exit "$report_status"
+      - name: Upload validated message
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-message
+          path: market-six-indicators/telegram-message.txt
+          if-no-files-found: error
+
+  send-telegram:
+    needs: validate-report
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: "@LilcMarketBrief"
+    steps:
+      - name: Download validated message
+        uses: actions/download-artifact@v4
+        with:
+          name: telegram-message
+          path: message
+      - name: Send to Telegram
+        working-directory: message
+        run: |
+          test -s telegram-message.txt
+          jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --rawfile text telegram-message.txt \
+            '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' > payload.json
+          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors \
+            --header 'content-type: application/json' \
+            --data @payload.json \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
