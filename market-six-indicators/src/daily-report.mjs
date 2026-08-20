@@ -54,31 +54,35 @@ async function pageText(browser, url, label) {
 }
 
 function parseVix(text) {
-  const area = nearby(text, [/S&P 500 VIX/i, /Volatility S&P 500/i, /VIX/i], "VIX");
-  const value = requireMatch(area, /(?:VIX|Volatility)[\s\S]{0,180}?([0-9]{1,2}(?:\.[0-9]{1,2})?)/i, "VIX")[1];
-  const date = requireMatch(area, /((?:Closed|Close)[^|]{0,80}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i, "VIX")[1];
-  return { value: parseNumber(value, "VIX"), display: value, date: clean(date), source: sources.vix };
+  // Investing's visible header is: CBOE Volatility Index (VIX) ... 14.89 ... Closed·19/08.
+  // Capture the first decimal price and close label together, not a nearby S&P 500 reference.
+  const header = requireMatch(
+    text,
+    /CBOE Volatility Index\s*\(VIX\)[\s\S]{0,900}?\b(\d{1,2}\.\d{1,2})\b[\s\S]{0,120}?((?:Closed|Close)[^\s|]{0,30})/i,
+    "VIX"
+  );
+  return { value: parseNumber(header[1], "VIX"), display: header[1], date: clean(header[2]), source: sources.vix };
 }
 function parseVxn(text) {
   const row = requireMatch(text, /(\d{4}-\d{2}-\d{2})\s*:\s*([0-9]+(?:\.[0-9]+)?)/, "VXN（FRED）");
-  const updated = text.match(/Updated:\s*([^|]{3,80})/i)?.[1] || row[1];
+  const updated = text.match(/Updated:\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\s+[A-Z]{2,4})/i)?.[1] || row[1];
   return { value: parseNumber(row[2], "VXN"), display: row[2], date: `${row[1]}；页面更新时间：${clean(updated)}`, source: sources.vxn };
 }
 function parseCape(text) {
-  const area = nearby(text, [/Shiller PE Ratio/i], "CAPE");
-  const pair = requireMatch(area, /Shiller PE Ratio[\s\S]{0,220}?([0-9]+(?:\.[0-9]+)?)[\s\S]{0,220}?((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[^|]{0,45}\d{4}|\d{1,2}:\d{2}\s*(?:AM|PM)[^|]{0,45})/i, "CAPE");
+  const pair = requireMatch(text, /Current Shiller PE Ratio:\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,120}?(\d{1,2}:\d{2}\s*(?:AM|PM)\s+[A-Z]{2,4},?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2})/i, "CAPE");
   return { value: parseNumber(pair[1], "CAPE"), display: pair[1], date: clean(pair[2]), source: sources.cape };
 }
-function parseGuruFocus(text, label, source, anchors, percent = false) {
-  const area = nearby(text, anchors, label);
-  const dated = requireMatch(area, /([0-9]+(?:\.[0-9]+)?)\s*%?[\s\S]{0,160}?(?:as of|As of|Date)\s*:?[\s]*(\d{4}-\d{2}-\d{2})/i, label);
-  const value = parseNumber(dated[1], label);
-  return { value, display: `${dated[1]}${percent ? "%" : ""}`, date: dated[2], source };
+function parseNasdaqPe(text) {
+  const dated = requireMatch(text, /Nasdaq 100 PE Ratio\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\(As of\s*(\d{4}-\d{2}-\d{2})\)/i, "纳斯达克100 PE");
+  return { value: parseNumber(dated[1], "纳斯达克100 PE"), display: dated[1], date: dated[2], source: sources.ndxPe };
 }
 function parseAhr999(text) {
-  const area = nearby(text, [/ahr999囤币指标/i, /AHR999/i], "BTC AHR999");
-  const row = requireMatch(area, /(\d{4}[\/-]\d{2}[\/-]\d{2})[\s\S]{0,260}?([0-9]+(?:\.[0-9]+)?)/, "BTC AHR999");
+  const row = requireMatch(text, /AHR999\s*[—-]\s*latest reading UTC\s*(\d{4}-\d{2}-\d{2})[\s\S]{0,120}?([0-9]+(?:\.[0-9]+)?)\s+(?:bargain|DCA|caution|bubble)\s+zone/i, "BTC AHR999");
   return { value: parseNumber(row[2], "BTC AHR999"), display: row[2], date: row[1].replaceAll("/", "-"), source: sources.ahr999 };
+}
+function parseBuffett(text) {
+  const dated = requireMatch(text, /USA Ratio of Total Market Cap over GDP\s*:\s*([0-9]+(?:\.[0-9]+)?)%\s*\(As of\s*(\d{4}-\d{2}-\d{2})\)/i, "Wilshire 5000 / GDP");
+  return { value: parseNumber(dated[1], "Wilshire 5000 / GDP"), display: `${dated[1]}%`, date: dated[2], source: sources.buffett };
 }
 function classification(value, ranges) {
   for (const [limit, zone, risk] of ranges) if (value < limit) return { zone, risk };
@@ -119,9 +123,9 @@ try {
         vix: parseVix(raw.vix),
         vxn: parseVxn(raw.vxn),
         cape: parseCape(raw.cape),
-        ndxPe: parseGuruFocus(raw.ndxPe, "纳斯达克100 PE", sources.ndxPe, [/Nasdaq 100 PE Ratio/i, /Nasdaq-100 PE/i]),
+        ndxPe: parseNasdaqPe(raw.ndxPe),
         ahr999: parseAhr999(raw.ahr999),
-        buffett: parseGuruFocus(raw.buffett, "Wilshire 5000 / GDP", sources.buffett, [/Ratio of Total Market Cap Over GDP/i, /Wilshire 5000/i], true)
+        buffett: parseBuffett(raw.buffett)
       };
       await sendTelegram(formatReport(results));
       console.log("Validated market brief sent.");
