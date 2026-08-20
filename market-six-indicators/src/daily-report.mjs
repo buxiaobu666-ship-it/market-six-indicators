@@ -45,26 +45,34 @@ function nearby(text, anchors, label) {
   throw new Error(`${label} 页面未找到指标名称`);
 }
 
-async function pageText(browser, url, label) {
+async function pageData(browser, url, key) {
   const page = await browser.newPage({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/133 Safari/537.36" });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(3000);
     const text = clean(await page.locator("body").innerText({ timeout: 20000 }));
-    if (text.length < 100) throw new Error(`${label} 页面未返回足够的可读内容`);
-    return text;
+    if (text.length < 100) throw new Error(`${key} 页面未返回足够的可读内容`);
+
+    // Investing puts the VIX quote and its change percentage in separate
+    // elements. Reading the quote element directly prevents a percentage such
+    // as 0.54% from ever being reported as the index level.
+    if (key === "vix") {
+      const quote = clean(await page.locator('[data-test="instrument-price-last"]').first().innerText({ timeout: 10000 }));
+      const header = clean(await page.locator('[data-test="instrument-header-details"]').first().innerText({ timeout: 10000 }));
+      if (!quote || !header) throw new Error("VIX 页面未找到主报价或实时/收盘状态字段");
+      return { text, quote, header };
+    }
+    return { text };
   } finally { await page.close(); }
 }
 
-function parseVix(text) {
-  // Investing's visible header is: CBOE Volatility Index (VIX) ... 14.89 ... Closed·19/08.
-  // Capture the first decimal price and close label together, not a nearby S&P 500 reference.
-  const header = requireMatch(
-    text,
-    /CBOE Volatility Index\s*\(VIX\)[\s\S]{0,900}?\b(\d{1,2}\.\d{1,2})\b[\s\S]{0,120}?((?:Closed|Close)[^\s|]{0,30})/i,
-    "VIX"
-  );
-  return { value: parseNumber(header[1], "VIX"), display: header[1], date: clean(header[2]), source: sources.vix };
+function parseVix(data) {
+  if (!/^\d{1,2}(?:\.\d+)?$/.test(data.quote)) {
+    throw new Error("VIX 主报价字段不是可验证的指数数值");
+  }
+  const status = data.header.match(/(?:Real-time Data|Closed(?:\s*[·|]\s*\d{1,2}\/\d{1,2})?)(?:\s*[·|]\s*\d{1,2}:\d{2}(?::\d{2})?)?/i)?.[0];
+  if (!status) throw new Error("VIX 页面未找到实时/收盘更新时间");
+  return { value: parseNumber(data.quote, "VIX"), display: data.quote, date: `网页显示：${clean(status)}`, source: sources.vix };
 }
 function parseVxn(text) {
   const row = requireMatch(text, /(\d{4}-\d{2}-\d{2})\s*:\s*([0-9]+(?:\.[0-9]+)?)/, "VXN（FRED）");
@@ -134,18 +142,18 @@ try {
   const raw = {};
   const failures = [];
   for (const [key, url] of Object.entries(sources)) {
-    try { raw[key] = await pageText(browser, url, key); }
+    try { raw[key] = await pageData(browser, url, key); }
     catch (error) { failures.push(`${url}：${error.message}`); }
   }
   if (!failures.length) {
     try {
       const results = {
         vix: parseVix(raw.vix),
-        vxn: parseVxn(raw.vxn),
-        cape: parseCape(raw.cape),
-        ndxPe: parseNasdaqPe(raw.ndxPe),
-        ahr999: parseAhr999(raw.ahr999),
-        buffett: parseBuffett(raw.buffett)
+        vxn: parseVxn(raw.vxn.text),
+        cape: parseCape(raw.cape.text),
+        ndxPe: parseNasdaqPe(raw.ndxPe.text),
+        ahr999: parseAhr999(raw.ahr999.text),
+        buffett: parseBuffett(raw.buffett.text)
       };
       await sendTelegram(formatReport(results));
       console.log("Validated market brief sent.");
