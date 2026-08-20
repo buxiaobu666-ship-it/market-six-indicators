@@ -73,7 +73,10 @@ function parseCape(text) {
   return { value: parseNumber(pair[1], "CAPE"), display: pair[1], date: clean(pair[2]), source: sources.cape };
 }
 function parseNasdaqPe(text) {
-  const dated = requireMatch(text, /Nasdaq 100 PE Ratio\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\(As of\s*(\d{4}-\d{2}-\d{2})\)/i, "纳斯达克100 PE");
+  const dated =
+    text.match(/Nasdaq 100 PE Ratio(?:\s*:\s*|\s+was\s+|\s+is\s+)([0-9]+(?:\.[0-9]+)?)[\s\S]{0,240}?(?:\(?As of\s*)?(\d{4}-\d{2}-\d{2})/i) ||
+    text.match(/Last Value\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,360}?Latest Period\s*(\d{4}-\d{2}-\d{2})/i);
+  if (!dated) throw new Error("纳斯达克100 PE 页面未找到可验证的当前值/日期组合");
   return { value: parseNumber(dated[1], "纳斯达克100 PE"), display: dated[1], date: dated[2], source: sources.ndxPe };
 }
 function parseAhr999(text) {
