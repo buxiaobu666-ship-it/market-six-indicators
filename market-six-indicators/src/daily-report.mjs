@@ -1,10 +1,12 @@
 import { chromium } from "playwright";
+import { writeFile } from "node:fs/promises";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@LilcMarketBrief";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DRY_RUN = process.env.DRY_RUN === "1";
+const REPORT_OUTPUT_FILE = process.env.REPORT_OUTPUT_FILE;
 
-if (!TOKEN && !DRY_RUN) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
+if (!TOKEN && !DRY_RUN && !REPORT_OUTPUT_FILE) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
 
 const sources = {
   vix: "https://www.investing.com/indices/volatility-s-p-500",
@@ -104,6 +106,13 @@ function formatReport(results) {
   return `市场六指标日报｜${date}（北京时间）\n\n${blocks.join("\n\n")}\n\n说明：所有数值均为本次直接读取的来源页面显示值；不同网页的更新节奏不同，日期以各页面显示为准。`;
 }
 async function sendTelegram(text) {
+  // The self-hosted Mac runner can read the source pages but cannot reliably
+  // reach Telegram. Persist the validated text for a GitHub-hosted send job.
+  if (REPORT_OUTPUT_FILE) {
+    await writeFile(REPORT_OUTPUT_FILE, text, "utf8");
+    console.log(`Validated Telegram message written to ${REPORT_OUTPUT_FILE}.`);
+    return;
+  }
   if (DRY_RUN) {
     console.log("DRY RUN — Telegram 未发送。\n" + text);
     return;
