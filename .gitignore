@@ -1,0 +1,7 @@
+node_modules/
+telegram-message.txt
+report-audit.json
+telegram-receipt.json
+payload.json
+.env
+.DS_Store

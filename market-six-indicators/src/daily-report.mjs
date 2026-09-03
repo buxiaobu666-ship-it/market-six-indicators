@@ -1,14 +1,15 @@
 import { chromium } from "playwright";
 import { writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { readWithRecovery, collectAll } from "./recovery.mjs";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@LilcMarketBrief";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DRY_RUN = process.env.DRY_RUN === "1";
 const REPORT_OUTPUT_FILE = process.env.REPORT_OUTPUT_FILE;
 
-if (!TOKEN && !DRY_RUN && !REPORT_OUTPUT_FILE) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
-
-const sources = {
+export const sources = {
   vix: "https://www.investing.com/indices/volatility-s-p-500",
   vxn: "https://fred.stlouisfed.org/series/VXNCLS",
   cape: "https://www.multpl.com/shiller-pe",
@@ -48,7 +49,8 @@ function nearby(text, anchors, label) {
 async function pageData(browser, url, key) {
   const page = await browser.newPage({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/133 Safari/537.36" });
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    if (!response || !response.ok()) throw new Error(`HTTP ${response?.status() || "no response"}`);
     await page.waitForTimeout(3000);
     const text = clean(await page.locator("body").innerText({ timeout: 20000 }));
     if (text.length < 100) throw new Error(`${key} 页面未返回足够的可读内容`);
@@ -66,7 +68,7 @@ async function pageData(browser, url, key) {
   } finally { await page.close(); }
 }
 
-function parseVix(data) {
+export function parseVix(data) {
   if (!/^\d{1,2}(?:\.\d+)?$/.test(data.quote)) {
     throw new Error("VIX 主报价字段不是可验证的指数数值");
   }
@@ -74,27 +76,27 @@ function parseVix(data) {
   if (!status) throw new Error("VIX 页面未找到实时/收盘更新时间");
   return { value: parseNumber(data.quote, "VIX"), display: data.quote, date: `网页显示：${clean(status)}`, source: sources.vix };
 }
-function parseVxn(text) {
+export function parseVxn(text) {
   const row = requireMatch(text, /(\d{4}-\d{2}-\d{2})\s*:\s*([0-9]+(?:\.[0-9]+)?)/, "VXN（FRED）");
   const updated = text.match(/Updated:\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\s+[A-Z]{2,4})/i)?.[1] || row[1];
   return { value: parseNumber(row[2], "VXN"), display: row[2], date: `${row[1]}；页面更新时间：${clean(updated)}`, source: sources.vxn };
 }
-function parseCape(text) {
+export function parseCape(text) {
   const pair = requireMatch(text, /Current Shiller PE Ratio:\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,120}?(\d{1,2}:\d{2}\s*(?:AM|PM)\s+[A-Z]{2,4},?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2})/i, "CAPE");
   return { value: parseNumber(pair[1], "CAPE"), display: pair[1], date: clean(pair[2]), source: sources.cape };
 }
-function parseNasdaqPe(text) {
+export function parseNasdaqPe(text) {
   const dated =
     text.match(/Nasdaq 100 PE Ratio(?:\s*:\s*|\s+was\s+|\s+is\s+)([0-9]+(?:\.[0-9]+)?)[\s\S]{0,240}?(?:\(?As of\s*)?(\d{4}-\d{2}-\d{2})/i) ||
     text.match(/Last Value\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,360}?Latest Period\s*(\d{4}-\d{2}-\d{2})/i);
   if (!dated) throw new Error("纳斯达克100 PE 页面未找到可验证的当前值/日期组合");
   return { value: parseNumber(dated[1], "纳斯达克100 PE"), display: dated[1], date: dated[2], source: sources.ndxPe };
 }
-function parseAhr999(text) {
+export function parseAhr999(text) {
   const row = requireMatch(text, /AHR999\s*[—-]\s*latest reading UTC\s*(\d{4}-\d{2}-\d{2})[\s\S]{0,120}?([0-9]+(?:\.[0-9]+)?)\s+(?:bargain|DCA|caution|bubble)\s+zone/i, "BTC AHR999");
   return { value: parseNumber(row[2], "BTC AHR999"), display: row[2], date: row[1].replaceAll("/", "-"), source: sources.ahr999 };
 }
-function parseBuffett(text) {
+export function parseBuffett(text) {
   const dated = requireMatch(text, /USA Ratio of Total Market Cap over GDP\s*:\s*([0-9]+(?:\.[0-9]+)?)%\s*\(As of\s*(\d{4}-\d{2}-\d{2})\)/i, "Wilshire 5000 / GDP");
   return { value: parseNumber(dated[1], "Wilshire 5000 / GDP"), display: `${dated[1]}%`, date: dated[2], source: sources.buffett };
 }
@@ -103,22 +105,23 @@ function classification(value, ranges) {
   throw new Error("参考区间配置无效");
 }
 function valueFrom(metric) { return metric.key === "buffett" ? `${metric.display}` : metric.display; }
-function formatReport(results) {
-  const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+export function formatReport(results) {
+  if (definitions.some(({ key }) => !results[key])) throw new Error("六项数据未齐全，禁止生成日报");
+  const date = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "medium", hour12: false }).format(new Date());
   const blocks = definitions.map((definition, i) => {
     const item = results[definition.key];
     const c = classification(item.value, definition.ranges);
-    const range = definition.ranges.map(([limit, zone]) => Number.isFinite(limit) ? `<${limit} ${zone}` : `其余 ${zone}`).join("；");
+    const range = definition.ranges.map(([limit, zone], index, rows) => `${index === 0 ? `<${limit}` : Number.isFinite(limit) ? `${rows[index - 1][0]}≤值<${limit}` : `≥${rows[index - 1][0]}`} ${zone}`).join("；");
     return `${i + 1}. ${definition.name}\n当前值：${valueFrom(item)}\n页面数据日期/更新时间：${item.date}\n来源：${item.source}\n参考范围：${range}\n当前区间：${c.zone}｜风险等级：${c.risk}\n含义：${definition.meaning}\n建议：${definition.advice}`;
   });
-  return `市场六指标日报｜${date}（北京时间）\n\n${blocks.join("\n\n")}\n\n说明：所有数值均为本次直接读取的来源页面显示值；不同网页的更新节奏不同，日期以各页面显示为准。`;
+  return `市场六指标日报｜${date}（北京时间生成）\n\n${blocks.join("\n\n")}\n\n来源口径：沿用已批准的来源。VXN 为 FRED 发布的 CBOE 收盘序列；AHR999 为 aix4u 独立计算版，不是 CoinGlass；巴菲特指标为 GuruFocus 版，不是 LongtermTrends。\n说明：数值由本次网页读取，数据日期以各项标注为准，不等同于生成日期。风险分档为参考规则，不是网站评级；低波动或低估值不等于低投资风险，不构成买卖指令。`;
 }
 async function sendTelegram(text) {
   // The self-hosted Mac runner can read the source pages but cannot reliably
   // reach Telegram. Persist the validated text for a GitHub-hosted send job.
   if (REPORT_OUTPUT_FILE) {
     await writeFile(REPORT_OUTPUT_FILE, text, "utf8");
-    console.log(`Validated Telegram message written to ${REPORT_OUTPUT_FILE}.`);
+    console.log(`Telegram message written to ${REPORT_OUTPUT_FILE}.`);
     return;
   }
   if (DRY_RUN) {
@@ -134,35 +137,59 @@ async function sendTelegram(text) {
   if (!response.ok || !result.ok) throw new Error(`Telegram 发送失败：${result.description || response.status}`);
 }
 
-const browser = await chromium.launch({
-  headless: true,
-  ...(process.env.CHROME_EXECUTABLE_PATH ? { executablePath: process.env.CHROME_EXECUTABLE_PATH } : {})
-});
-try {
-  const raw = {};
-  const failures = [];
-  for (const [key, url] of Object.entries(sources)) {
-    try { raw[key] = await pageData(browser, url, key); }
-    catch (error) { failures.push(`${url}：${error.message}`); }
+export async function main() {
+  if (!TOKEN && !DRY_RUN && !REPORT_OUTPUT_FILE) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
+  let browser;
+  let guard;
+  // Scoped to this job, not a permanent power-setting change. Does not prevent
+  // shutdown, a flat battery, or forced/clamshell sleep.
+  if (process.platform === "darwin") {
+    guard = spawn("/usr/bin/caffeinate", ["-i", "-s", "-w", String(process.pid)], { stdio: "ignore" });
+    guard.on("error", () => console.warn("Task sleep guard unavailable."));
   }
-  if (!failures.length) {
+  const reset = async () => {
+    const old = browser;
+    browser = undefined;
+    if (old) await old.close().catch(() => {});
+  };
+  const getBrowser = async () => {
+    if (!browser) browser = await chromium.launch({
+      headless: true,
+      timeout: 45000,
+      ...(process.env.CHROME_EXECUTABLE_PATH ? { executablePath: process.env.CHROME_EXECUTABLE_PATH } : {})
+    });
+    return browser;
+  };
+  try {
+    let message;
     try {
-      const results = {
-        vix: parseVix(raw.vix),
-        vxn: parseVxn(raw.vxn.text),
-        cape: parseCape(raw.cape.text),
-        ndxPe: parseNasdaqPe(raw.ndxPe.text),
-        ahr999: parseAhr999(raw.ahr999.text),
-        buffett: parseBuffett(raw.buffett.text)
-      };
-      await sendTelegram(formatReport(results));
-      console.log("Validated market brief sent.");
-    } catch (error) { failures.push(error.message); }
+      const results = await collectAll(sources, (url, key) => readWithRecovery(
+        async () => pageData(await getBrowser(), url, key), { reset, key }
+      ), {
+        vix: parseVix,
+        vxn: data => parseVxn(data.text),
+        cape: data => parseCape(data.text),
+        ndxPe: data => parseNasdaqPe(data.text),
+        ahr999: data => parseAhr999(data.text),
+        buffett: data => parseBuffett(data.text)
+      });
+      message = formatReport(results);
+      if (process.env.REPORT_AUDIT_FILE) await writeFile(process.env.REPORT_AUDIT_FILE, JSON.stringify(results, null, 2), "utf8");
+      console.log("All six sources validated; report ready for delivery.");
+    } catch (error) {
+      message = `【市场六指标日报未发送】\n沿用已批准来源，未以估算或缺项拼接日报。取数或校验失败：\n${error.message}`.slice(0, 3900);
+      console.error(message);
+      process.exitCode = 1;
+    }
+    // Keep delivery outside collection's catch: a delivery failure must never
+    // produce a second send attempt disguised as a data-failure notification.
+    await sendTelegram(message);
+  } finally {
+    await reset();
+    guard?.kill();
   }
-  if (failures.length) {
-    const notice = `【市场六指标日报未发送】\n本次未使用估算或替代数据。失败原因：\n${failures.map((x, i) => `${i + 1}. ${x}`).join("\n")}`.slice(0, 3900);
-    await sendTelegram(notice);
-    console.error(notice);
-    process.exitCode = 1;
-  }
-} finally { await browser.close(); }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

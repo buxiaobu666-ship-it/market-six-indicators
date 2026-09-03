@@ -77,7 +77,7 @@ for (const update of updates) {
   if (!message || !isReportCommand(message) || !isAllowedGroup(message)) continue;
   const started = await queueDailyReport();
   const reply = started
-    ? "已收到 /report：日报取数任务已创建。若 Mac 在线将立即发送；若离线，会在你下次开机并登录后自动执行。"
+    ? "已收到 /report：已创建取数任务。运行器在线且网络正常时开始读取，六项校验通过后发送完整日报；离线或休眠时需等待恢复，无法保证立即完成。"
     : "已有一份日报任务正在运行或排队，本次不重复创建；完成后会自动发送。";
   await telegram("sendMessage", { chat_id: message.chat.id, text: reply, disable_web_page_preview: true });
 }

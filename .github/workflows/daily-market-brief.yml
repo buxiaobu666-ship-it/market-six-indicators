@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: daily-market-brief
+  cancel-in-progress: false
+
 jobs:
   validate-report:
     runs-on: [self-hosted, macOS, ARM64]
@@ -23,14 +27,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci --ignore-scripts
+      - run: npm test
       - name: Read and validate all six sources
         run: |
           set +e
-          REPORT_OUTPUT_FILE=telegram-message.txt npm run report
+          REPORT_OUTPUT_FILE=telegram-message.txt REPORT_AUDIT_FILE=report-audit.json npm run report
           report_status=$?
           if [ ! -s telegram-message.txt ]; then
-            printf '【市场六指标日报未发送】\n本次未使用估算或替代数据。运行异常：未生成可发送文本；请查看本次 GitHub Actions 日志。' > telegram-message.txt
+            printf '【市场六指标日报未发送】\n运行异常：未生成可发送文本；请查看本次 GitHub Actions 日志。' > telegram-message.txt
           fi
           exit "$report_status"
       - name: Upload validated message
@@ -38,7 +43,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: telegram-message
-          path: market-six-indicators/telegram-message.txt
+          path: |
+            market-six-indicators/telegram-message.txt
+            market-six-indicators/report-audit.json
+          retention-days: 7
           if-no-files-found: error
 
   send-telegram:
@@ -61,7 +69,10 @@ jobs:
           test -s telegram-message.txt
           jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --rawfile text telegram-message.txt \
             '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' > payload.json
-          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors \
+          curl --fail-with-body --silent --show-error --connect-timeout 20 --max-time 60 \
             --header 'content-type: application/json' \
             --data @payload.json \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" > telegram-receipt.json
+          jq -e --rawfile text telegram-message.txt \
+            '.ok == true and .result.text == $text and (.result.message_id | type == "number")' telegram-receipt.json
+          jq '{ok, message_id: .result.message_id, chat: .result.chat.username, date: .result.date, characters: (.result.text | length)}' telegram-receipt.json
