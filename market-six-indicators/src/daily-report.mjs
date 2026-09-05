@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import { writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { readWithRecovery, collectAll } from "./recovery.mjs";
+import { readWithRecovery, collectAll, withDeadline } from "./recovery.mjs";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@LilcMarketBrief";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -51,7 +51,7 @@ async function pageData(browser, url, key) {
   try {
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     if (!response || !response.ok()) throw new Error(`HTTP ${response?.status() || "no response"}`);
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1500);
     const text = clean(await page.locator("body").innerText({ timeout: 20000 }));
     if (text.length < 100) throw new Error(`${key} 页面未返回足够的可读内容`);
 
@@ -65,7 +65,9 @@ async function pageData(browser, url, key) {
       return { text, quote, header };
     }
     return { text };
-  } finally { await page.close(); }
+  } finally {
+    await Promise.race([page.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))]);
+  }
 }
 
 export function parseVix(data) {
@@ -150,7 +152,7 @@ export async function main() {
   const reset = async () => {
     const old = browser;
     browser = undefined;
-    if (old) await old.close().catch(() => {});
+    if (old) await Promise.race([old.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))]);
   };
   const getBrowser = async () => {
     if (!browser) browser = await chromium.launch({
@@ -164,7 +166,7 @@ export async function main() {
     let message;
     try {
       const results = await collectAll(sources, (url, key) => readWithRecovery(
-        async () => pageData(await getBrowser(), url, key), { reset, key }
+        async () => withDeadline(pageData(await getBrowser(), url, key), 70000, "source read"), { reset, key }
       ), {
         vix: parseVix,
         vxn: data => parseVxn(data.text),

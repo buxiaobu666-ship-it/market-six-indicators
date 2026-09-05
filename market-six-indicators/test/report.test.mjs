@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readWithRecovery, collectAll, isTransient } from "../src/recovery.mjs";
+import { readWithRecovery, collectAll, isTransient, withDeadline } from "../src/recovery.mjs";
 import { sources, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport } from "../src/daily-report.mjs";
 
 // Synthetic fixtures, not live market data.
@@ -16,10 +16,15 @@ test("suspended network rebuilds browser and retries same operation", async () =
 });
 test("transient failure stops after three attempts", async () => {
   let calls = 0;
-  await assert.rejects(readWithRecovery(async () => {
+  const error = await readWithRecovery(async () => {
     calls++; throw new Error("net::ERR_NETWORK_CHANGED");
-  }, { reset: async () => {}, sleep: async () => {}, warn: () => {} }), /NETWORK_CHANGED/);
+  }, { reset: async () => {}, sleep: async () => {}, warn: () => {} }).catch(error => error);
+  assert.match(error.message, /NETWORK_CHANGED/);
+  assert.equal(error.code, "NETWORK_UNAVAILABLE");
   assert.equal(calls, 3);
+});
+test("a stuck source is bounded by a hard deadline", async () => {
+  await assert.rejects(withDeadline(new Promise(() => {}), 5, "source read"), /source read timeout/);
 });
 test("access denial and data errors are not transient", async () => {
   for (const message of ["HTTP 403", "value/date pair not found", "HTTP 404"]) {
@@ -35,6 +40,16 @@ test("one invalid metric prevents a partial result and still checks other metric
     b: () => ({ value: 1, display: "1", date: "2026-09-02", source: "https://b/" })
   }), /https:\/\/a\/：unverified/);
   assert.deepEqual(read, ["a", "b"]);
+});
+test("network outage fails fast instead of spending the whole job on every page", async () => {
+  const read = [];
+  await assert.rejects(collectAll({ a: "https://a/", b: "https://b/" }, async (_, key) => {
+    read.push(key);
+    const error = new Error("net::ERR_INTERNET_DISCONNECTED");
+    error.code = "NETWORK_UNAVAILABLE";
+    throw error;
+  }, { a: () => {}, b: () => {} }), /INTERNET_DISCONNECTED/);
+  assert.deepEqual(read, ["a"]);
 });
 test("source mismatch fails validation", async () => {
   await assert.rejects(collectAll({ a: "https://a/" }, async () => {}, {

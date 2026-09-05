@@ -15,7 +15,7 @@ concurrency:
 jobs:
   validate-report:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 20
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: market-six-indicators
@@ -38,6 +38,18 @@ jobs:
             printf '【市场六指标日报未发送】\n运行异常：未生成可发送文本；请查看本次 GitHub Actions 日志。' > telegram-message.txt
           fi
           exit "$report_status"
+      - name: Wait briefly for network recovery
+        if: always()
+        working-directory: .
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --connect-timeout 5 --max-time 10 https://github.com/robots.txt >/dev/null; then
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Network did not recover before artifact upload.' >&2
+          exit 1
       - name: Upload validated message
         if: always()
         uses: actions/upload-artifact@v4
