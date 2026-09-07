@@ -5,6 +5,7 @@ const CHAT_ID = "@LilcMarketBrief";
 const DELIVERY_SCHEDULE = ["08:00", "08:10", "08:30", "09:00"];
 const SOURCE_ATTEMPTS = 2;
 const TELEGRAM_ATTEMPTS = 3;
+const COLLECTION_DEADLINE_MS = 70_000;
 
 function pause(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -13,17 +14,17 @@ function pause(ms) {
 async function readPage(browser, key, url) {
   const page = await browser.newPage();
   try {
-    const response = await page.goto(url, { waitUntil:"domcontentloaded", timeout:25000 });
+    const response = await page.goto(url, { waitUntil:"domcontentloaded", timeout:12000 });
     if (!response?.ok()) {
       const title = await page.title().catch(() => "");
       throw new Error(`HTTP ${response?.status() || "无响应"}${title ? `（${title}）` : ""}`);
     }
-    await page.waitForTimeout(1500);
-    const text = clean(await page.locator("body").innerText({ timeout:15000 }));
+    await page.waitForTimeout(1000);
+    const text = clean(await page.locator("body").innerText({ timeout:8000 }));
     if (text.length < 100) throw new Error("页面正文过短，无法校验");
     if (key === "vix") {
-      const quote = clean(await page.locator('[data-test="instrument-price-last"]').first().innerText({ timeout:10000 }));
-      const header = clean(await page.locator('[data-test="instrument-header-details"]').first().innerText({ timeout:10000 }));
+      const quote = clean(await page.locator('[data-test="instrument-price-last"]').first().innerText({ timeout:6000 }));
+      const header = clean(await page.locator('[data-test="instrument-header-details"]').first().innerText({ timeout:6000 }));
       return { text, quote, header };
     }
     return { text };
@@ -36,10 +37,15 @@ export async function collectSix(env) {
   const browser = await launch(env.BROWSER);
   const results = {};
   const errors = [];
+  const startedAt = Date.now();
   try {
     for (const [key, url] of Object.entries(SOURCES)) {
       let lastError;
       for (let attempt = 1; attempt <= SOURCE_ATTEMPTS; attempt += 1) {
+        if (Date.now() - startedAt >= COLLECTION_DEADLINE_MS) {
+          lastError = new Error("本轮六项读取达到70秒总限时，等待下一备用时段重试");
+          break;
+        }
         try {
           const raw = await readPage(browser, key, url);
           const parsed = PARSERS[key](raw);

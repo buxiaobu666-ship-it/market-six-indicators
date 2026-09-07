@@ -4,6 +4,9 @@ on:
   schedule:
     # 01:10 UTC = Beijing 09:10. GitHub runs this in its own cloud.
     - cron: "10 1 * * *"
+    # Later recovery windows for a longer source or network outage.
+    - cron: "10 4 * * *"
+    - cron: "10 10 * * *"
   workflow_dispatch:
 
 permissions:
@@ -42,12 +45,12 @@ jobs:
           exit 1
 
       - name: Send a non-silent failure alert to Telegram
-        if: failure()
+        if: failure() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '10 10 * * *')
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: "@LilcMarketBrief"
         run: |
-          text='【市场六指标日报故障提醒】北京时间09:10的云端最终补发仍未成功。系统没有发送估算值或残缺日报，请检查 Cloudflare/GitHub 运行状态。'
+          text='【市场六指标日报故障提醒】北京时间18:10的云端最终补发仍未成功。系统没有发送估算值或残缺日报，请检查 Cloudflare/GitHub 运行状态。'
           jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$text" \
             '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' > alert.json
           curl --fail-with-body --silent --show-error \
