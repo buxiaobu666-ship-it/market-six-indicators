@@ -1,0 +1,27 @@
+name: Cloud deployment package tests
+on:
+  push:
+    branches: [cloud-daily-0800]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts && npm test
+        working-directory: market-six-indicators
+      - run: docker build -t market-six-cloud ./market-six-indicators
+      - name: Validate disabled-by-default deployment
+        run: |
+          set +e
+          docker run --rm -e TELEGRAM_BOT_TOKEN=synthetic-test-token market-six-cloud > startup.log 2>&1
+          code=$?
+          set -e
+          test "$code" -ne 0
+          grep -q 'Cloud delivery is disabled' startup.log
