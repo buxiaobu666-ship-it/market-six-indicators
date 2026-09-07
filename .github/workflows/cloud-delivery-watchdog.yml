@@ -1,0 +1,60 @@
+name: Cloud delivery watchdog
+
+on:
+  schedule:
+    # 01:10 UTC = Beijing 09:10. GitHub runs this in its own cloud.
+    - cron: "10 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-delivery-watchdog
+  cancel-in-progress: false
+
+jobs:
+  verify-and-retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Verify delivery and trigger one cloud backup run
+        env:
+          REPORT_RUN_KEY: ${{ secrets.CLOUDFLARE_REPORT_RUN_KEY }}
+        run: |
+          test -n "$REPORT_RUN_KEY"
+          set +e
+          http_code=$(curl --silent --show-error \
+            --retry 3 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 15 --max-time 240 \
+            --output response.json --write-out '%{http_code}' \
+            --request POST \
+            --header "Authorization: Bearer $REPORT_RUN_KEY" \
+            'https://market-six-daily-report.market-six-cloudflare-probe.workers.dev/run?notify_failure=0')
+          curl_status=$?
+          set -e
+          if [ "$curl_status" -eq 0 ] && [ "$http_code" = "200" ] && jq -e '.ok == true' response.json >/dev/null; then
+            jq '{ok, day, duplicate, messageId, attempt}' response.json
+            exit 0
+          fi
+          echo "Cloudflare backup run failed (curl=$curl_status, HTTP=$http_code)." >&2
+          test ! -s response.json || jq . response.json >&2
+          exit 1
+
+      - name: Send a non-silent failure alert to Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: "@LilcMarketBrief"
+        run: |
+          text='【市场六指标日报故障提醒】北京时间09:10的云端最终补发仍未成功。系统没有发送估算值或残缺日报，请检查 Cloudflare/GitHub 运行状态。'
+          jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$text" \
+            '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' > alert.json
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 15 --max-time 60 \
+            --header 'content-type: application/json' \
+            --data @alert.json \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" > receipt.json
+          jq -e '.ok == true and (.result.message_id | type == "number")' receipt.json >/dev/null
+          jq '{ok, message_id: .result.message_id, chat: .result.chat.username}' receipt.json
