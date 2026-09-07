@@ -1,13 +1,11 @@
-# Cloudflare 免费云端取数验证
+# Cloudflare 免费版市场六指标日报
 
-此程序仅测试当前已批准六个来源在 Cloudflare Browser Run 中的网页访问，不发送 Telegram，不创建定时任务。
+正式版运行在 Cloudflare Workers + Browser Rendering 免费额度内，不依赖个人电脑开机。
 
-使用 Workers Free；Browser Run 免费额度为每天10分钟。首次部署前确认账号处于免费计划。
+- Cron：`0 0 * * *`，即北京时间每天 08:00。
+- 六项必须全部取得当前值、页面日期和批准后的原始链接；任何一项失败都不拼接日报。
+- 成功时向 `@LilcMarketBrief` 发送完整日报；失败时只发送明确的校验失败通知。
+- `REPORT_STATE` 用于同一天去重；手动 `/run` 入口需要 `RUN_KEY`，健康检查为 `/health`。
+- `TELEGRAM_BOT_TOKEN`、`RUN_KEY` 必须使用 Cloudflare Secret 保存，禁止写入仓库。
 
-1. 登录 Cloudflare 后，在此目录执行 npm ci 和 npx wrangler login。
-2. 执行 npm run deploy；再用 npx wrangler secret put PROBE_KEY 设置随机测试密钥（不要粘贴到聊天）。
-3. 使用带 Authorization: Bearer 的 POST 请求运行一次测试，保存状态、页面片段和时间。
-4. 逐项核对六个当前值、日期和网页来源；任何403、验证码或无法核对均不能启用正式日报。
-5. 全部通过后，再接入免费的定时触发、持久化去重和 Telegram Secrets。
-
-未配置 PROBE_KEY 时，所有请求均拒绝。没有公开任意URL抓取入口，无法用于访问六个来源之外的URL。
+当前批准来源：Investing VIX、FRED VXN、Multpl CAPE、ChartRow Nasdaq-100 trailing P/E、aix4u AHR999、LongtermTrends Wilshire 5000/GDP。

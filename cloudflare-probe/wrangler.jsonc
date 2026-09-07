@@ -1,10 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "market-six-source-probe",
+  "name": "market-six-daily-report",
   "main": "src/worker.mjs",
   "compatibility_date": "2026-09-07",
   "compatibility_flags": ["nodejs_compat"],
   "browser": { "binding": "BROWSER" },
+  "kv_namespaces": [
+    { "binding": "REPORT_STATE", "id": "ed7d756a4eee41bf906c14dbdf56459c" }
+  ],
+  "triggers": { "crons": ["0 0 * * *"] },
   "workers_dev": true,
   "preview_urls": false
 }

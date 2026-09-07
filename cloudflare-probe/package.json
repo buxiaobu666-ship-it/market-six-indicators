@@ -1,8 +1,8 @@
 {
-  "name": "market-six-cloudflare-probe",
+  "name": "market-six-cloudflare-daily-report",
   "private": true,
   "type": "module",
-  "scripts": { "build": "wrangler deploy --dry-run", "deploy": "wrangler deploy" },
+  "scripts": { "build": "wrangler deploy --dry-run", "deploy": "wrangler deploy", "test": "node --test test/*.test.mjs" },
   "dependencies": { "@cloudflare/playwright": "1.3.6" },
   "devDependencies": { "wrangler": "4.129.0" }
 }
