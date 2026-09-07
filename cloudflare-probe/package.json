@@ -1,0 +1,8 @@
+{
+  "name": "market-six-cloudflare-probe",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "wrangler deploy --dry-run", "deploy": "wrangler deploy" },
+  "dependencies": { "@cloudflare/playwright": "1.3.6" },
+  "devDependencies": { "wrangler": "4.129.0" }
+}

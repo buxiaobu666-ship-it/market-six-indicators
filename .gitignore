@@ -1,4 +1,5 @@
 node_modules/
+.wrangler/
 telegram-message.txt
 report-audit.json
 telegram-receipt.json
