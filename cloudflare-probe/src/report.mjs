@@ -80,6 +80,35 @@ export function beijingDay(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit" }).format(now);
 }
 
+function summaryLine(results) {
+  const cape = results.cape;
+  const buffett = results.buffett;
+  const ndxPe = results.ndxPe;
+  const ahr999 = results.ahr999;
+
+  const sp500 = cape.value >= 35 || buffett.value >= 180
+    ? "🔴 高估值风险｜只保留基础定投，不额外加码"
+    : cape.value >= 30 || buffett.value >= 150
+      ? "🟡 估值偏高｜维持基础定投，不额外加码"
+      : "🟢 常规定投｜按原计划分批执行";
+
+  const nasdaq = ndxPe.value >= 39
+    ? "🔴 高估值风险｜只保留基础定投，不额外加码"
+    : ndxPe.value >= 33
+      ? "🟡 估值偏高｜维持基础定投，不额外加码"
+      : "🟢 正常定投｜按原计划";
+
+  const btc = ahr999.value < 0.45
+    ? "🟢 抄底区｜按既定比例分批，不一次性投入"
+    : ahr999.value <= 1.2
+      ? "🟢 定投区｜按原计划"
+      : ahr999.value <= 3
+        ? "🟡 偏热区｜降低新增比例，避免追涨"
+        : "🔴 极热区｜不额外加码，避免追涨";
+
+  return `先看结论：\n\n标普500：${sp500}\nCAPE ${cape.display}、巴菲特指标 ${buffett.display}\n\n纳指100：${nasdaq}\nPE ${ndxPe.display}\n\nBTC：${btc}\nAHR999 ${ahr999.display}`;
+}
+
 export function formatReport(results, now = new Date()) {
   if (DEFINITIONS.some(({key}) => !results[key])) throw new Error("六项数据未齐全，禁止生成日报");
   const generated = new Intl.DateTimeFormat("zh-CN", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }).format(now);
@@ -89,7 +118,7 @@ export function formatReport(results, now = new Date()) {
     const current = classify(item.value, definition.ranges);
     return `${index + 1}. ${definition.name}\n当前值：${item.display}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
   });
-  const report = `【市场六指标日报】${generated}（北京时间）\n\n${sections.join("\n\n")}\n\n说明：每项数值均由本次页面直接读取，并与页面日期及原始链接配对校验；风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
+  const report = `【市场六指标日报】${generated}（北京时间）\n\n${summaryLine(results)}\n\n${sections.join("\n\n")}\n\n说明：每项数值均由本次页面直接读取，并与页面日期及原始链接配对校验；风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
   if (report.length > 4096) throw new Error(`日报长度${report.length}超过Telegram单条消息限制`);
   return report;
 }

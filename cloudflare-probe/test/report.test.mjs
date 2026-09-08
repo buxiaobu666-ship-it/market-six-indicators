@@ -26,6 +26,21 @@ test("formats six complete sections with approved links and labels", () => {
   assert.ok(report.length < 4096);
 });
 
+test("puts the three core figures directly below the conclusion", () => {
+  const results = {
+    vix:{value:15.3,display:"15.30",date:"2026-09-07",source:SOURCES.vix},
+    vxn:{value:20.16,display:"20.16",date:"2026-09-03",source:SOURCES.vxn},
+    cape:{value:41.41,display:"41.41",date:"2026-09-04",source:SOURCES.cape},
+    ndxPe:{value:31.5,display:"31.5",date:"2026-09-04",source:SOURCES.ndxPe},
+    ahr999:{value:0.5325,display:"0.5325",date:"2026-09-06（UTC）",source:SOURCES.ahr999},
+    buffett:{value:237.4,display:"237.4%",date:"2026-09-04",source:SOURCES.buffett}
+  };
+  const report = formatReport(results, new Date("2026-09-08T00:00:00Z"));
+  assert.match(report, /标普500：🔴 高估值风险｜只保留基础定投，不额外加码\nCAPE 41\.41、巴菲特指标 237\.4%/);
+  assert.match(report, /纳指100：🟢 正常定投｜按原计划\nPE 31\.5/);
+  assert.match(report, /BTC：🟢 定投区｜按原计划\nAHR999 0\.5325/);
+});
+
 test("never formats a partial report", () => {
   assert.throws(() => formatReport({}), /六项数据未齐全/);
   assert.match(failureMessage(new Error("HTTP 403")), /没有拼接残缺日报/);
