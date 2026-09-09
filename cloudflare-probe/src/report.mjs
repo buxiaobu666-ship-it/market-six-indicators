@@ -96,15 +96,15 @@ function summaryLine(results) {
   const sp500 = entryStatus(cape.value);
   const nasdaq = entryStatus(ndxPe.value);
 
-  const btc = ahr999.value < 0.45
-    ? "🟢 抄底区｜按既定比例分批，不一次性投入"
-    : ahr999.value <= 1.2
-      ? "🟢 定投区｜按原计划"
-      : ahr999.value <= 3
-        ? "🟡 偏热区｜降低新增比例，避免追涨"
-        : "🔴 极热区｜不额外加码，避免追涨";
+  const btc = btcStatus(ahr999.value);
 
-  return `先看结论：\n\n标普500：${sp500}｜CAPE ${cape.display}\n开始定投区：25＜CAPE≤30\n可分批加仓区：CAPE≤25\n巴菲特指标：${buffett.display}（背景参考）\n\n纳指100：${nasdaq}｜PE ${ndxPe.display}\n开始定投区：25＜PE≤30\n可分批加仓区：PE≤25\n\nBTC：${btc}\nAHR999 ${ahr999.display}\n\n标普500、纳指100当前均按尚未开始定投判断；区间为个人执行规则，未经完整回测，不代表最佳买点。`;
+  return `先看结论：\n\n标普500：${sp500}｜CAPE ${cape.display}\n开始定投区：25＜CAPE≤30\n可分批加仓区：CAPE≤25\n巴菲特指标：${buffett.display}（背景参考）\n\n纳指100：${nasdaq}｜PE ${ndxPe.display}\n开始定投区：25＜PE≤30\n可分批加仓区：PE≤25\n\nBTC：${btc}｜AHR999 ${ahr999.display}\n状态：已开始定投（2026年7月起）\n继续定投区：0.45≤AHR999≤1.20\n可分批加仓区：AHR999＜0.45\n暂停新增参考：AHR999＞1.20\n加仓前检查持仓比例；定投区不代表低风险。\n\n标普500、纳指100当前均按尚未开始定投判断；区间为个人执行规则，未经完整回测，不代表最佳买点。`;
+}
+
+function btcStatus(value) {
+  if (value < 0.45) return "🟢 继续定投，可分批加仓";
+  if (value <= 1.2) return "🟢 继续定投";
+  return "🟡 暂停新增，检查持仓比例";
 }
 
 export function formatReport(results, now = new Date()) {
@@ -113,6 +113,9 @@ export function formatReport(results, now = new Date()) {
   const sections = DEFINITIONS.map((definition, index) => {
     const item = results[definition.key];
     if (item.source !== SOURCES[definition.key]) throw new Error(`${definition.name}来源校验失败`);
+    if (definition.key === "ahr999") {
+      return `${index + 1}. ${definition.name}\n当前值：${item.display}\n数据日期/更新时间：${item.date}\n参考范围：＜0.45 可分批加仓；0.45–1.20 继续定投（含边界）；＞1.20 暂停新增\n当前行动：${btcStatus(item.value)}\n资产风险：高波动，处于定投区不代表低风险\n代表含义：${definition.meaning}\n适合行为：按区间管理新增投入，加仓以持仓比例未超过个人上限为前提；不凭AHR999单独决定卖出。\n原始网页：${item.source}`;
+    }
     const current = classify(item.value, definition.ranges);
     return `${index + 1}. ${definition.name}\n当前值：${item.display}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
   });

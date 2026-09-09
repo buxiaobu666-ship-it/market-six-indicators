@@ -38,7 +38,14 @@ test("puts the three core figures directly below the conclusion", () => {
   const report = formatReport(results, new Date("2026-09-08T00:00:00Z"));
   assert.match(report, /标普500：🟡 等待启动｜CAPE 41\.41/);
   assert.match(report, /纳指100：🟡 等待启动｜PE 31\.5/);
-  assert.match(report, /BTC：🟢 定投区｜按原计划\nAHR999 0\.5325/);
+  assert.match(report, /BTC：🟢 继续定投｜AHR999 0\.5325/);
+  for (const [value,status] of [[0.449,"🟢 继续定投，可分批加仓"],[0.45,"🟢 继续定投"],[1.2,"🟢 继续定投"],[1.201,"🟡 暂停新增，检查持仓比例"]]) {
+    const updated = formatReport({...results, ahr999:{...results.ahr999,value,display:String(value)}});
+    assert.ok(updated.includes(`BTC：${status}｜AHR999 ${value}`));
+    assert.ok(updated.includes(`当前行动：${status}`));
+    assert.ok(updated.includes("已开始定投（2026年7月起）"));
+    assert.ok(updated.length < 4096);
+  }
   for (const [value, status] of [[30.01,"🟡 等待启动"],[30,"🟢 可开始定投"],[25.01,"🟢 可开始定投"],[25,"🟢 可开始定投｜已进入加仓参考区"],[20,"🟢 可开始定投｜已进入加仓参考区"]]) {
     results.cape = {...results.cape, value, display:String(value)};
     const updated = formatReport(results);
