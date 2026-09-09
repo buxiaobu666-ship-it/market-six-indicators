@@ -36,9 +36,17 @@ test("puts the three core figures directly below the conclusion", () => {
     buffett:{value:237.4,display:"237.4%",date:"2026-09-04",source:SOURCES.buffett}
   };
   const report = formatReport(results, new Date("2026-09-08T00:00:00Z"));
-  assert.match(report, /标普500：🔴 高估值风险｜只保留基础定投，不额外加码\nCAPE 41\.41、巴菲特指标 237\.4%/);
-  assert.match(report, /纳指100：🟢 正常定投｜按原计划\nPE 31\.5/);
+  assert.match(report, /标普500：🟡 等待启动｜CAPE 41\.41/);
+  assert.match(report, /纳指100：🟡 等待启动｜PE 31\.5/);
   assert.match(report, /BTC：🟢 定投区｜按原计划\nAHR999 0\.5325/);
+  for (const [value, status] of [[30.01,"🟡 等待启动"],[30,"🟢 可开始定投"],[25.01,"🟢 可开始定投"],[25,"🟢 可开始定投｜已进入加仓参考区"],[20,"🟢 可开始定投｜已进入加仓参考区"]]) {
+    results.cape = {...results.cape, value, display:String(value)};
+    const updated = formatReport(results);
+    assert.ok(updated.includes(`标普500：${status}｜CAPE ${value}`));
+    assert.ok(updated.includes("纳指100：🟡 等待启动｜PE 31.5"));
+    assert.ok(!updated.includes("美元"));
+    assert.ok(updated.length < 4096);
+  }
 });
 
 test("never formats a partial report", () => {

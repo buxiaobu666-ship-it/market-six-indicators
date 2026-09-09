@@ -80,23 +80,21 @@ export function beijingDay(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit" }).format(now);
 }
 
+// Both equity plans remain unstarted until the user explicitly confirms starting each one.
+function entryStatus(value) {
+  if (value <= 25) return "🟢 可开始定投｜已进入加仓参考区";
+  if (value <= 30) return "🟢 可开始定投";
+  return "🟡 等待启动";
+}
+
 function summaryLine(results) {
   const cape = results.cape;
   const buffett = results.buffett;
   const ndxPe = results.ndxPe;
   const ahr999 = results.ahr999;
 
-  const sp500 = cape.value >= 35 || buffett.value >= 180
-    ? "🔴 高估值风险｜只保留基础定投，不额外加码"
-    : cape.value >= 30 || buffett.value >= 150
-      ? "🟡 估值偏高｜维持基础定投，不额外加码"
-      : "🟢 常规定投｜按原计划分批执行";
-
-  const nasdaq = ndxPe.value >= 39
-    ? "🔴 高估值风险｜只保留基础定投，不额外加码"
-    : ndxPe.value >= 33
-      ? "🟡 估值偏高｜维持基础定投，不额外加码"
-      : "🟢 正常定投｜按原计划";
+  const sp500 = entryStatus(cape.value);
+  const nasdaq = entryStatus(ndxPe.value);
 
   const btc = ahr999.value < 0.45
     ? "🟢 抄底区｜按既定比例分批，不一次性投入"
@@ -106,7 +104,7 @@ function summaryLine(results) {
         ? "🟡 偏热区｜降低新增比例，避免追涨"
         : "🔴 极热区｜不额外加码，避免追涨";
 
-  return `先看结论：\n\n标普500：${sp500}\nCAPE ${cape.display}、巴菲特指标 ${buffett.display}\n\n纳指100：${nasdaq}\nPE ${ndxPe.display}\n\nBTC：${btc}\nAHR999 ${ahr999.display}`;
+  return `先看结论：\n\n标普500：${sp500}｜CAPE ${cape.display}\n开始定投区：25＜CAPE≤30\n可分批加仓区：CAPE≤25\n巴菲特指标：${buffett.display}（背景参考）\n\n纳指100：${nasdaq}｜PE ${ndxPe.display}\n开始定投区：25＜PE≤30\n可分批加仓区：PE≤25\n\nBTC：${btc}\nAHR999 ${ahr999.display}\n\n标普500、纳指100当前均按尚未开始定投判断；区间为个人执行规则，未经完整回测，不代表最佳买点。`;
 }
 
 export function formatReport(results, now = new Date()) {
