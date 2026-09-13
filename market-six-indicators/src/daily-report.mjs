@@ -1,15 +1,14 @@
 import { chromium } from "playwright";
 import { writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import { readWithRecovery, collectAll, withDeadline } from "./recovery.mjs";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@LilcMarketBrief";
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DRY_RUN = process.env.DRY_RUN === "1";
 const REPORT_OUTPUT_FILE = process.env.REPORT_OUTPUT_FILE;
 
-export const sources = {
+if (!TOKEN && !DRY_RUN && !REPORT_OUTPUT_FILE) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
+
+const sources = {
   vix: "https://www.investing.com/indices/volatility-s-p-500",
   vxn: "https://fred.stlouisfed.org/series/VXNCLS",
   cape: "https://www.multpl.com/shiller-pe",
@@ -19,11 +18,11 @@ export const sources = {
 };
 
 const definitions = [
-{ key: "vix", name: "VIX（恐慌指数）", meaning: "标普500期权隐含波动率，反映市场对未来短期波动的定价。", ranges: [[15, "低波动", "低"], [25, "常态", "中低"], [35, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "波动处于较高水平时，宜降低一次性重仓比例并分批安排资金。" },
-  { key: "vxn", name: "VXN（纳指100短期指标）", meaning: "纳斯达克100期权隐含波动率，反映科技成长股的预期波动。", ranges: [[20, "低波动", "低"], [30, "常态", "中低"], [40, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "波动处于较高水平时，宜减少短期集中暴露并采用分批节奏。" },
+  { key: "vix", name: "VIX", meaning: "标普500期权隐含波动率，反映市场对未来短期波动的定价。", ranges: [[15, "低波动", "低"], [25, "常态", "中低"], [35, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "波动处于较高水平时，宜降低一次性重仓比例并分批安排资金。" },
+  { key: "vxn", name: "VXN", meaning: "纳斯达克100期权隐含波动率，反映科技成长股的预期波动。", ranges: [[20, "低波动", "低"], [30, "常态", "中低"], [40, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "波动处于较高水平时，宜减少短期集中暴露并采用分批节奏。" },
   { key: "cape", name: "标普500 Shiller PE（CAPE）", meaning: "以长期实际盈利平滑后的美股大盘估值指标。", ranges: [[20, "偏低", "低"], [30, "常态", "中低"], [40, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "估值偏高时，宜降低一次性重仓比例，并提高对买入价格和分散度的要求。" },
   { key: "ndxPe", name: "纳斯达克100 PE", meaning: "纳斯达克100成分股的盈利估值水平。", ranges: [[20, "偏低", "低"], [30, "常态", "中低"], [35, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "估值偏高时，宜避免一次性集中押注成长股，采用分批配置节奏。" },
-  { key: "ahr999", name: "BTC AHR999（定投指标）", meaning: "比特币价格相对历史定投成本和长期趋势的区间指标。", ranges: [[0.45, "偏低", "低"], [1.2, "定投区", "中低"], [3, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "指标偏高时，宜控制追涨仓位；处于较低区间时，仍宜按计划分批而非一次性投入。" },
+  { key: "ahr999", name: "BTC AHR999", meaning: "比特币价格相对历史定投成本和长期趋势的区间指标。", ranges: [[0.45, "偏低", "低"], [1.2, "定投区", "中低"], [3, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "指标偏高时，宜控制追涨仓位；处于较低区间时，仍宜按计划分批而非一次性投入。" },
   { key: "buffett", name: "巴菲特指标（Wilshire 5000 / GDP）", meaning: "美国股市总市值（Wilshire 5000）相对 GDP 的估值观察指标。", ranges: [[100, "偏低", "低"], [150, "常态", "中低"], [200, "偏高", "中高"], [Infinity, "极高", "高"]], advice: "整体估值偏高时，宜降低一次性权益重仓比例，并保留分批投入空间。" }
 ];
 
@@ -49,9 +48,8 @@ function nearby(text, anchors, label) {
 async function pageData(browser, url, key) {
   const page = await browser.newPage({ userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/133 Safari/537.36" });
   try {
-    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-    if (!response || !response.ok()) throw new Error(`HTTP ${response?.status() || "no response"}`);
-    await page.waitForTimeout(1500);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(3000);
     const text = clean(await page.locator("body").innerText({ timeout: 20000 }));
     if (text.length < 100) throw new Error(`${key} 页面未返回足够的可读内容`);
 
@@ -65,12 +63,10 @@ async function pageData(browser, url, key) {
       return { text, quote, header };
     }
     return { text };
-  } finally {
-    await Promise.race([page.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))]);
-  }
+  } finally { await page.close(); }
 }
 
-export function parseVix(data) {
+function parseVix(data) {
   if (!/^\d{1,2}(?:\.\d+)?$/.test(data.quote)) {
     throw new Error("VIX 主报价字段不是可验证的指数数值");
   }
@@ -78,27 +74,27 @@ export function parseVix(data) {
   if (!status) throw new Error("VIX 页面未找到实时/收盘更新时间");
   return { value: parseNumber(data.quote, "VIX"), display: data.quote, date: `网页显示：${clean(status)}`, source: sources.vix };
 }
-export function parseVxn(text) {
+function parseVxn(text) {
   const row = requireMatch(text, /(\d{4}-\d{2}-\d{2})\s*:\s*([0-9]+(?:\.[0-9]+)?)/, "VXN（FRED）");
   const updated = text.match(/Updated:\s*([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+(?:AM|PM)\s+[A-Z]{2,4})/i)?.[1] || row[1];
   return { value: parseNumber(row[2], "VXN"), display: row[2], date: `${row[1]}；页面更新时间：${clean(updated)}`, source: sources.vxn };
 }
-export function parseCape(text) {
+function parseCape(text) {
   const pair = requireMatch(text, /Current Shiller PE Ratio:\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,120}?(\d{1,2}:\d{2}\s*(?:AM|PM)\s+[A-Z]{2,4},?\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2})/i, "CAPE");
   return { value: parseNumber(pair[1], "CAPE"), display: pair[1], date: clean(pair[2]), source: sources.cape };
 }
-export function parseNasdaqPe(text) {
+function parseNasdaqPe(text) {
   const dated =
     text.match(/Nasdaq 100 PE Ratio(?:\s*:\s*|\s+was\s+|\s+is\s+)([0-9]+(?:\.[0-9]+)?)[\s\S]{0,240}?(?:\(?As of\s*)?(\d{4}-\d{2}-\d{2})/i) ||
     text.match(/Last Value\s*([0-9]+(?:\.[0-9]+)?)[\s\S]{0,360}?Latest Period\s*(\d{4}-\d{2}-\d{2})/i);
   if (!dated) throw new Error("纳斯达克100 PE 页面未找到可验证的当前值/日期组合");
   return { value: parseNumber(dated[1], "纳斯达克100 PE"), display: dated[1], date: dated[2], source: sources.ndxPe };
 }
-export function parseAhr999(text) {
+function parseAhr999(text) {
   const row = requireMatch(text, /AHR999\s*[—-]\s*latest reading UTC\s*(\d{4}-\d{2}-\d{2})[\s\S]{0,120}?([0-9]+(?:\.[0-9]+)?)\s+(?:bargain|DCA|caution|bubble)\s+zone/i, "BTC AHR999");
   return { value: parseNumber(row[2], "BTC AHR999"), display: row[2], date: row[1].replaceAll("/", "-"), source: sources.ahr999 };
 }
-export function parseBuffett(text) {
+function parseBuffett(text) {
   const dated = requireMatch(text, /USA Ratio of Total Market Cap over GDP\s*:\s*([0-9]+(?:\.[0-9]+)?)%\s*\(As of\s*(\d{4}-\d{2}-\d{2})\)/i, "Wilshire 5000 / GDP");
   return { value: parseNumber(dated[1], "Wilshire 5000 / GDP"), display: `${dated[1]}%`, date: dated[2], source: sources.buffett };
 }
@@ -107,23 +103,22 @@ function classification(value, ranges) {
   throw new Error("参考区间配置无效");
 }
 function valueFrom(metric) { return metric.key === "buffett" ? `${metric.display}` : metric.display; }
-export function formatReport(results) {
-  if (definitions.some(({ key }) => !results[key])) throw new Error("六项数据未齐全，禁止生成日报");
-  const date = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "medium", hour12: false }).format(new Date());
+function formatReport(results) {
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   const blocks = definitions.map((definition, i) => {
     const item = results[definition.key];
     const c = classification(item.value, definition.ranges);
-    const range = definition.ranges.map(([limit, zone], index, rows) => `${index === 0 ? `<${limit}` : Number.isFinite(limit) ? `${rows[index - 1][0]}≤值<${limit}` : `≥${rows[index - 1][0]}`} ${zone}`).join("；");
+    const range = definition.ranges.map(([limit, zone]) => Number.isFinite(limit) ? `<${limit} ${zone}` : `其余 ${zone}`).join("；");
     return `${i + 1}. ${definition.name}\n当前值：${valueFrom(item)}\n页面数据日期/更新时间：${item.date}\n来源：${item.source}\n参考范围：${range}\n当前区间：${c.zone}｜风险等级：${c.risk}\n含义：${definition.meaning}\n建议：${definition.advice}`;
   });
-  return `市场六指标日报｜${date}（北京时间生成）\n\n${blocks.join("\n\n")}\n\n来源口径：沿用已批准的来源。VXN 为 FRED 发布的 CBOE 收盘序列；AHR999 为 aix4u 独立计算版，不是 CoinGlass；巴菲特指标为 GuruFocus 版，不是 LongtermTrends。\n说明：数值由本次网页读取，数据日期以各项标注为准，不等同于生成日期。风险分档为参考规则，不是网站评级；低波动或低估值不等于低投资风险，不构成买卖指令。`;
+  return `市场六指标日报｜${date}（北京时间）\n\n${blocks.join("\n\n")}\n\n说明：所有数值均为本次直接读取的来源页面显示值；不同网页的更新节奏不同，日期以各页面显示为准。`;
 }
 async function sendTelegram(text) {
   // The self-hosted Mac runner can read the source pages but cannot reliably
   // reach Telegram. Persist the validated text for a GitHub-hosted send job.
   if (REPORT_OUTPUT_FILE) {
     await writeFile(REPORT_OUTPUT_FILE, text, "utf8");
-    console.log(`Telegram message written to ${REPORT_OUTPUT_FILE}.`);
+    console.log(`Validated Telegram message written to ${REPORT_OUTPUT_FILE}.`);
     return;
   }
   if (DRY_RUN) {
@@ -139,59 +134,62 @@ async function sendTelegram(text) {
   if (!response.ok || !result.ok) throw new Error(`Telegram 发送失败：${result.description || response.status}`);
 }
 
-export async function main() {
-  if (!TOKEN && !DRY_RUN && !REPORT_OUTPUT_FILE) throw new Error("Missing TELEGRAM_BOT_TOKEN GitHub Secret.");
-  let browser;
-  let guard;
-  // Scoped to this job, not a permanent power-setting change. Does not prevent
-  // shutdown, a flat battery, or forced/clamshell sleep.
-  if (process.platform === "darwin") {
-    guard = spawn("/usr/bin/caffeinate", ["-i", "-s", "-w", String(process.pid)], { stdio: "ignore" });
-    guard.on("error", () => console.warn("Task sleep guard unavailable."));
-  }
-  const reset = async () => {
-    const old = browser;
-    browser = undefined;
-    if (old) await Promise.race([old.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))]);
-  };
-  const getBrowser = async () => {
-    if (!browser) browser = await chromium.launch({
-      headless: true,
-      timeout: 45000,
-      ...(process.env.CHROME_EXECUTABLE_PATH ? { executablePath: process.env.CHROME_EXECUTABLE_PATH } : {})
-    });
-    return browser;
-  };
+function shortError(error) {
+  return String(error?.message || error).replace(/\s+/g, " ").slice(0, 700);
+}
+
+async function startBrowser() {
+  const browser = await chromium.launch({
+    headless: true,
+    timeout: 60_000,
+    ...(process.env.CHROME_EXECUTABLE_PATH ? { executablePath: process.env.CHROME_EXECUTABLE_PATH } : {})
+  });
   try {
-    let message;
-    try {
-      const results = await collectAll(sources, (url, key) => readWithRecovery(
-        async () => withDeadline(pageData(await getBrowser(), url, key), 70000, "source read"), { reset, key }
-      ), {
-        vix: parseVix,
-        vxn: data => parseVxn(data.text),
-        cape: data => parseCape(data.text),
-        ndxPe: data => parseNasdaqPe(data.text),
-        ahr999: data => parseAhr999(data.text),
-        buffett: data => parseBuffett(data.text)
-      });
-      message = formatReport(results);
-      if (process.env.REPORT_AUDIT_FILE) await writeFile(process.env.REPORT_AUDIT_FILE, JSON.stringify(results, null, 2), "utf8");
-      console.log("All six sources validated; report ready for delivery.");
-    } catch (error) {
-      message = `【市场六指标日报未发送】\n沿用已批准来源，未以估算或缺项拼接日报。取数或校验失败：\n${error.message}`.slice(0, 3900);
-      console.error(message);
-      process.exitCode = 1;
-    }
-    // Keep delivery outside collection's catch: a delivery failure must never
-    // produce a second send attempt disguised as a data-failure notification.
-    await sendTelegram(message);
-  } finally {
-    await reset();
-    guard?.kill();
+    const page = await browser.newPage();
+    await page.goto("about:blank", { timeout: 10_000 });
+    await page.close();
+    return browser;
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
-}
+let browser;
+const failures = [];
+try {
+  try {
+    browser = await startBrowser();
+  } catch (error) {
+    failures.push(`本机 Chrome 启动健康检查失败：${shortError(error)}`);
+  }
+
+  if (browser) {
+    const raw = {};
+    for (const [key, url] of Object.entries(sources)) {
+      try { raw[key] = await pageData(browser, url, key); }
+      catch (error) { failures.push(`${url}：${error.message}`); }
+    }
+    if (!failures.length) {
+      try {
+        const results = {
+          vix: parseVix(raw.vix),
+          vxn: parseVxn(raw.vxn.text),
+          cape: parseCape(raw.cape.text),
+          ndxPe: parseNasdaqPe(raw.ndxPe.text),
+          ahr999: parseAhr999(raw.ahr999.text),
+          buffett: parseBuffett(raw.buffett.text)
+        };
+        await sendTelegram(formatReport(results));
+        console.log("Validated market brief sent.");
+      } catch (error) { failures.push(error.message); }
+    }
+  }
+
+  if (failures.length) {
+    const notice = `【市场六指标日报未发送】\n本次未使用估算或替代数据。失败原因：\n${failures.map((x, i) => `${i + 1}. ${x}`).join("\n")}`.slice(0, 3900);
+    await sendTelegram(notice);
+    console.error(notice);
+    process.exitCode = 1;
+  }
+} finally { await browser?.close().catch(() => {}); }
