@@ -2,7 +2,7 @@ import { launch } from "@cloudflare/playwright";
 import { SOURCES, PARSERS, beijingDay, failureMessage, formatReport, clean } from "./report.mjs";
 
 const CHAT_ID = "@LilcMarketBrief";
-const DELIVERY_SCHEDULE = ["08:00", "08:10", "08:30", "09:00"];
+const DELIVERY_SCHEDULE = ["08:00"];
 const SOURCE_ATTEMPTS = 2;
 const TELEGRAM_ATTEMPTS = 3;
 const COLLECTION_DEADLINE_MS = 70_000;
@@ -142,7 +142,7 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    const finalAttempt = controller.cron === "0 1 * * *";
-    ctx.waitUntil(execute(env, {notifyFailure:finalAttempt}));
+    if (controller.cron !== "0 0 * * *") return;
+    ctx.waitUntil(execute(env, {notifyFailure:true}));
   }
 };
