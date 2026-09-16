@@ -7,6 +7,13 @@ export const SOURCES = {
   buffett: "https://www.longtermtrends.com/market-cap-to-gdp-the-buffett-indicator/"
 };
 
+export function isCompleteResults(results) {
+  return Object.entries(SOURCES).every(([key, source]) => {
+    const item = results?.[key];
+    return item?.source === source && item.date && Number.isFinite(item.value);
+  });
+}
+
 const DEFINITIONS = [
   { key:"vix", name:"VIX（恐慌指数）", meaning:"标普500期权隐含波动率，反映市场对未来约30天波动的定价。", ranges:[[15,"低","低"],[20,"正常","中低"],[30,"偏高","高"],[Infinity,"高","极高"]], advice:"偏高时宜降低一次性重仓比例、保留现金并分批安排资金。" },
   { key:"vxn", name:"VXN（纳指100短期指标）", meaning:"纳斯达克100期权隐含波动率，反映科技成长股未来约30天的预期波动。", ranges:[[20,"低","低"],[30,"正常","中低"],[40,"偏高","高"],[Infinity,"高","极高"]], advice:"偏高时宜减少短期集中暴露，避免追涨并采用分批节奏。" },

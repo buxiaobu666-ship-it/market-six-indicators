@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport, failureMessage } from "../src/report.mjs";
+import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport, failureMessage, isCompleteResults } from "../src/report.mjs";
 
 test("parses each current value together with its displayed date", () => {
   assert.equal(parseVix({quote:"14.53", header:"14.53 +1.47% Closed · 04/09"}).value, 14.53);
@@ -59,4 +59,11 @@ test("puts the three core figures directly below the conclusion", () => {
 test("never formats a partial report", () => {
   assert.throws(() => formatReport({}), /六项数据未齐全/);
   assert.match(failureMessage(new Error("HTTP 403")), /没有拼接残缺日报/);
+});
+
+test("accepts only a complete validated six-source snapshot for scheduled delivery", () => {
+  const snapshot = Object.fromEntries(Object.entries(SOURCES).map(([key, source]) => [key, { value:22, date:"2026-09-16", source }]));
+  assert.equal(isCompleteResults(snapshot), true);
+  assert.equal(isCompleteResults({ ...snapshot, vix:{ ...snapshot.vix, source:"https://wrong.example" } }), false);
+  assert.equal(isCompleteResults({ ...snapshot, ahr999:{ ...snapshot.ahr999, date:"" } }), false);
 });

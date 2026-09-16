@@ -1,8 +1,11 @@
 import { launch } from "@cloudflare/playwright";
-import { SOURCES, PARSERS, beijingDay, failureMessage, formatReport, clean } from "./report.mjs";
+import { SOURCES, PARSERS, beijingDay, failureMessage, formatReport, clean, isCompleteResults } from "./report.mjs";
 
 const CHAT_ID = "@LilcMarketBrief";
 const DELIVERY_SCHEDULE = ["08:00"];
+const PREFETCH_CRON = "57 23 * * *"; // 07:57 Beijing: collect and validate before the 08:00 send.
+const DELIVERY_CRON = "0 0 * * *"; // 08:00 Beijing: send only the validated snapshot.
+const PREFETCH_MAX_AGE_MS = 10 * 60 * 1000;
 const SOURCE_ATTEMPTS = 2;
 const TELEGRAM_ATTEMPTS = 3;
 const COLLECTION_DEADLINE_MS = 70_000;
@@ -88,7 +91,35 @@ async function sendTelegram(env, text) {
   throw new Error(`Telegram发送失败：${clean(lastError?.message)}（已尝试${TELEGRAM_ATTEMPTS}次）`);
 }
 
-async function execute(env, {force=false, notifyFailure=true} = {}) {
+function prefetchKey(day) {
+  return `prefetch:${day}`;
+}
+
+async function prepare(env) {
+  const day = beijingDay();
+  const key = prefetchKey(day);
+  const collectedAt = new Date().toISOString();
+  try {
+    const results = await collectSix(env);
+    if (!isCompleteResults(results)) throw new Error("预取结果未形成六项完整校验记录");
+    await env.REPORT_STATE.put(key, JSON.stringify({ status:"ready", collectedAt, results }), { expirationTtl:86400 });
+    return { ok:true, day, collectedAt };
+  } catch (error) {
+    await env.REPORT_STATE.put(key, JSON.stringify({ status:"failed", collectedAt, error:clean(error.message) }), { expirationTtl:86400 });
+    throw error;
+  }
+}
+
+async function readPrefetchedResults(env, day) {
+  const prepared = await env.REPORT_STATE.get(prefetchKey(day), "json");
+  const age = Date.now() - Date.parse(prepared?.collectedAt || "");
+  if (prepared?.status !== "ready" || !Number.isFinite(age) || age < 0 || age > PREFETCH_MAX_AGE_MS || !isCompleteResults(prepared.results)) {
+    throw new Error("08:00前的六项数据预取或校验失败；为避免延迟发送，本次不补发完整日报");
+  }
+  return prepared.results;
+}
+
+async function execute(env, {force=false, notifyFailure=true, usePrefetch=false} = {}) {
   const day = beijingDay();
   const key = `delivery:${day}`;
   const previous = await env.REPORT_STATE.get(key, "json");
@@ -99,7 +130,7 @@ async function execute(env, {force=false, notifyFailure=true} = {}) {
   const attempt = Number(previous?.attempt || 0) + 1;
   await env.REPORT_STATE.put(key, JSON.stringify({ status:"running", attempt, startedAt:new Date().toISOString() }), { expirationTtl:604800 });
   try {
-    const results = await collectSix(env);
+    const results = usePrefetch ? await readPrefetchedResults(env, day) : await collectSix(env);
     const messageId = await sendTelegram(env, formatReport(results));
     await env.REPORT_STATE.put(key, JSON.stringify({ status:"sent", attempt, messageId, sentAt:new Date().toISOString(), results }), { expirationTtl:3888000 });
     return { ok:true, day, attempt, messageId, results };
@@ -142,7 +173,12 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    if (controller.cron !== "0 0 * * *") return;
-    ctx.waitUntil(execute(env, {notifyFailure:true}));
+    if (controller.cron === PREFETCH_CRON) {
+      ctx.waitUntil(prepare(env));
+      return;
+    }
+    if (controller.cron === DELIVERY_CRON) {
+      ctx.waitUntil(execute(env, {notifyFailure:true, usePrefetch:true}));
+    }
   }
 };
