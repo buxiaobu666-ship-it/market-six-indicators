@@ -95,6 +95,43 @@ function prefetchKey(day) {
   return `prefetch:${day}`;
 }
 
+function offsetDay(day, offset) {
+  const [year, month, date] = day.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, date + offset));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function isMonday(day) {
+  return new Date(`${day}T00:00:00Z`).getUTCDay() === 1;
+}
+
+function previousMonthFirst(day) {
+  const [year, month] = day.split("-").map(Number);
+  const priorYear = month === 1 ? year - 1 : year;
+  const priorMonth = month === 1 ? 12 : month - 1;
+  return `${priorYear}-${String(priorMonth).padStart(2, "0")}-01`;
+}
+
+async function sentResults(env, day) {
+  const record = await env.REPORT_STATE.get(`delivery:${day}`, "json");
+  return record?.status === "sent" && isCompleteResults(record.results) ? record.results : undefined;
+}
+
+async function previousSuccessfulResults(env, day) {
+  for (let offset = 1; offset <= 14; offset += 1) {
+    const results = await sentResults(env, offsetDay(day, -offset));
+    if (results) return results;
+  }
+  return undefined;
+}
+
+async function reportComparisons(env, day) {
+  const comparisons = { previous:await previousSuccessfulResults(env, day) };
+  if (isMonday(day)) comparisons.weekly = await sentResults(env, offsetDay(day, -7));
+  if (day.endsWith("-01")) comparisons.monthly = await sentResults(env, previousMonthFirst(day));
+  return comparisons;
+}
+
 async function prepare(env) {
   const day = beijingDay();
   const key = prefetchKey(day);
@@ -131,7 +168,7 @@ async function execute(env, {force=false, notifyFailure=true, usePrefetch=false}
   await env.REPORT_STATE.put(key, JSON.stringify({ status:"running", attempt, startedAt:new Date().toISOString() }), { expirationTtl:604800 });
   try {
     const results = usePrefetch ? await readPrefetchedResults(env, day) : await collectSix(env);
-    const messageId = await sendTelegram(env, formatReport(results));
+    const messageId = await sendTelegram(env, formatReport(results, new Date(), await reportComparisons(env, day)));
     await env.REPORT_STATE.put(key, JSON.stringify({ status:"sent", attempt, messageId, sentAt:new Date().toISOString(), results }), { expirationTtl:3888000 });
     return { ok:true, day, attempt, messageId, results };
   } catch (caught) {

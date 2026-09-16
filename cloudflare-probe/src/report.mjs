@@ -83,6 +83,32 @@ function rangeText(ranges) {
   }).join("；");
 }
 
+function precision(item) {
+  const fractional = String(item?.display ?? "").match(/\.(\d+)/)?.[1];
+  return fractional ? Math.min(fractional.length, 4) : 0;
+}
+
+function signed(value, digits) {
+  const rounded = Number(value.toFixed(digits));
+  return `${rounded > 0 ? "+" : ""}${rounded.toFixed(digits)}`;
+}
+
+export function comparisonText(key, current, baseline, label = "较上次有效数据") {
+  if (!baseline || !Number.isFinite(baseline.value)) return `${label}：暂无可比的成功记录`;
+  const delta = current.value - baseline.value;
+  const percent = baseline.value === 0 ? null : delta / baseline.value * 100;
+  const digits = Math.max(precision(current), precision(baseline));
+  const absolute = key === "buffett" ? `${signed(delta, digits)} 个百分点` : signed(delta, digits);
+  return `${label}：${absolute}${percent === null ? "" : `（${signed(percent, 1)}%）`}`;
+}
+
+const SHORT_NAMES = { vix:"VIX", vxn:"VXN", cape:"CAPE", ndxPe:"纳指PE", ahr999:"AHR999", buffett:"巴菲特" };
+
+export function comparisonSummary(results, baseline, label) {
+  if (!baseline || !isCompleteResults(baseline)) return `${label}：上期没有完整成功记录，暂不比较。`;
+  return `${label}：${Object.keys(SOURCES).map(key => `${SHORT_NAMES[key]} ${comparisonText(key, results[key], baseline[key], "").replace(/^：/, "")}`).join("；")}`;
+}
+
 export function beijingDay(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit" }).format(now);
 }
@@ -94,7 +120,7 @@ function entryStatus(value) {
   return "🟡 等待启动";
 }
 
-function summaryLine(results) {
+function summaryLine(results, previous) {
   const cape = results.cape;
   const buffett = results.buffett;
   const ndxPe = results.ndxPe;
@@ -105,7 +131,7 @@ function summaryLine(results) {
 
   const btc = btcStatus(ahr999.value);
 
-  return `先看结论：\n\n标普500：${sp500}｜CAPE ${cape.display}\n开始定投区：25＜CAPE≤30\n可分批加仓区：CAPE≤25\n巴菲特指标：${buffett.display}（背景参考）\n\n纳指100：${nasdaq}｜PE ${ndxPe.display}\n开始定投区：25＜PE≤30\n可分批加仓区：PE≤25\n\nBTC：${btc}｜AHR999 ${ahr999.display}\n状态：已开始定投（2026年7月起）\n继续定投区：0.45≤AHR999≤1.20\n可分批加仓区：AHR999＜0.45\n暂停新增参考：AHR999＞1.20\n加仓前检查持仓比例；定投区不代表低风险。\n\n标普500、纳指100当前均按尚未开始定投判断；区间为个人执行规则，未经完整回测，不代表最佳买点。`;
+  return `先看结论：\n\n标普500：${sp500}｜CAPE ${cape.display}\n${comparisonText("cape", cape, previous?.cape)}\n开始定投区：25＜CAPE≤30\n可分批加仓区：CAPE≤25\n巴菲特指标：${buffett.display}（背景参考）\n\n纳指100：${nasdaq}｜PE ${ndxPe.display}\n${comparisonText("ndxPe", ndxPe, previous?.ndxPe)}\n开始定投区：25＜PE≤30\n可分批加仓区：PE≤25\n\nBTC：${btc}｜AHR999 ${ahr999.display}\n${comparisonText("ahr999", ahr999, previous?.ahr999)}\n状态：已开始定投（2026年7月起）\n继续定投区：0.45≤AHR999≤1.20\n可分批加仓区：AHR999＜0.45\n暂停新增参考：AHR999＞1.20\n加仓前检查持仓比例；定投区不代表低风险。\n\n标普500、纳指100当前均按尚未开始定投判断；区间为个人执行规则，未经完整回测，不代表最佳买点。`;
 }
 
 function btcStatus(value) {
@@ -114,19 +140,24 @@ function btcStatus(value) {
   return "🟡 暂停新增，检查持仓比例";
 }
 
-export function formatReport(results, now = new Date()) {
+export function formatReport(results, now = new Date(), comparisons = {}) {
   if (DEFINITIONS.some(({key}) => !results[key])) throw new Error("六项数据未齐全，禁止生成日报");
   const generated = new Intl.DateTimeFormat("zh-CN", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }).format(now);
   const sections = DEFINITIONS.map((definition, index) => {
     const item = results[definition.key];
     if (item.source !== SOURCES[definition.key]) throw new Error(`${definition.name}来源校验失败`);
+    const change = comparisonText(definition.key, item, comparisons.previous?.[definition.key]);
     if (definition.key === "ahr999") {
-      return `${index + 1}. ${definition.name}\n当前值：${item.display}\n数据日期/更新时间：${item.date}\n参考范围：＜0.45 可分批加仓；0.45–1.20 继续定投（含边界）；＞1.20 暂停新增\n当前行动：${btcStatus(item.value)}\n资产风险：高波动，处于定投区不代表低风险\n代表含义：${definition.meaning}\n适合行为：按区间管理新增投入，加仓以持仓比例未超过个人上限为前提；不凭AHR999单独决定卖出。\n原始网页：${item.source}`;
+      return `${index + 1}. ${definition.name}\n当前值：${item.display}\n${change}\n数据日期/更新时间：${item.date}\n参考范围：＜0.45 可分批加仓；0.45–1.20 继续定投（含边界）；＞1.20 暂停新增\n当前行动：${btcStatus(item.value)}\n资产风险：高波动，处于定投区不代表低风险\n代表含义：${definition.meaning}\n适合行为：按区间管理新增投入，加仓以持仓比例未超过个人上限为前提；不凭AHR999单独决定卖出。\n原始网页：${item.source}`;
     }
     const current = classify(item.value, definition.ranges);
-    return `${index + 1}. ${definition.name}\n当前值：${item.display}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
+    return `${index + 1}. ${definition.name}\n当前值：${item.display}\n${change}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
   });
-  const report = `【市场六指标日报】${generated}（北京时间）\n\n${summaryLine(results)}\n\n${sections.join("\n\n")}\n\n说明：每项数值均由本次页面直接读取，并与页面日期及原始链接配对校验；风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
+  const periodic = [
+    comparisons.weekly && comparisonSummary(results, comparisons.weekly, "本周变化（较上周一）"),
+    comparisons.monthly && comparisonSummary(results, comparisons.monthly, "本月变化（较上月1日）")
+  ].filter(Boolean);
+  const report = `【市场六指标日报】${generated}（北京时间）\n\n${summaryLine(results, comparisons.previous)}${periodic.length ? `\n\n${periodic.join("\n")}` : ""}\n\n${sections.join("\n\n")}\n\n说明：变化均与同一指定网页的成功读取记录比较；网页数据日期不更新时，不将其伪装成新数据。风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
   if (report.length > 4096) throw new Error(`日报长度${report.length}超过Telegram单条消息限制`);
   return report;
 }
