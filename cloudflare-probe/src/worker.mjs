@@ -125,10 +125,43 @@ async function previousSuccessfulResults(env, day) {
   return undefined;
 }
 
-async function reportComparisons(env, day) {
+function daysBetween(startDay, endDay) {
+  const days = [];
+  for (let day = startDay; day <= endDay; day = offsetDay(day, 1)) days.push(day);
+  return days;
+}
+
+function changedReadings(readings) {
+  return readings.filter((reading, index) => {
+    if (index === 0) return true;
+    const prior = readings[index - 1];
+    return reading.item.display !== prior.item.display || reading.item.date !== prior.item.date;
+  });
+}
+
+async function periodStatistics(env, startDay, endDay, currentResults) {
+  const days = daysBetween(startDay, endDay);
+  const snapshots = await Promise.all(days.map(async day => ({
+    day,
+    results:day === endDay ? currentResults : await sentResults(env, day)
+  })));
+  const complete = snapshots.filter(({results}) => isCompleteResults(results));
+  if (complete.length < 2) return undefined;
+  const items = {};
+  for (const key of Object.keys(SOURCES)) {
+    const readings = changedReadings(complete.map(({day, results}) => ({day, item:results[key]})));
+    if (!readings.length) continue;
+    const low = readings.reduce((best, reading) => reading.item.value < best.item.value ? reading : best);
+    const high = readings.reduce((best, reading) => reading.item.value > best.item.value ? reading : best);
+    items[key] = { start:readings[0].item, end:readings.at(-1).item, low:low.item, high:high.item };
+  }
+  return Object.keys(items).length ? { startDay, endDay, items } : undefined;
+}
+
+async function reportComparisons(env, day, currentResults) {
   const comparisons = { previous:await previousSuccessfulResults(env, day) };
-  if (isMonday(day)) comparisons.weekly = await sentResults(env, offsetDay(day, -7));
-  if (day.endsWith("-01")) comparisons.monthly = await sentResults(env, previousMonthFirst(day));
+  if (isMonday(day)) comparisons.weekly = await periodStatistics(env, offsetDay(day, -7), day, currentResults);
+  if (day.endsWith("-01")) comparisons.monthly = await periodStatistics(env, previousMonthFirst(day), day, currentResults);
   return comparisons;
 }
 
@@ -168,7 +201,7 @@ async function execute(env, {force=false, notifyFailure=true, usePrefetch=false}
   await env.REPORT_STATE.put(key, JSON.stringify({ status:"running", attempt, startedAt:new Date().toISOString() }), { expirationTtl:604800 });
   try {
     const results = usePrefetch ? await readPrefetchedResults(env, day) : await collectSix(env);
-    const messageId = await sendTelegram(env, formatReport(results, new Date(), await reportComparisons(env, day)));
+    const messageId = await sendTelegram(env, formatReport(results, new Date(), await reportComparisons(env, day, results)));
     await env.REPORT_STATE.put(key, JSON.stringify({ status:"sent", attempt, messageId, sentAt:new Date().toISOString(), results }), { expirationTtl:3888000 });
     return { ok:true, day, attempt, messageId, results };
   } catch (caught) {

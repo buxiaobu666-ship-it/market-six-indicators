@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport, failureMessage, isCompleteResults, comparisonText, comparisonSummary } from "../src/report.mjs";
+import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport, failureMessage, isCompleteResults, comparisonText, periodSummary } from "../src/report.mjs";
 
 test("parses each current value together with its displayed date", () => {
   assert.equal(parseVix({quote:"14.53", header:"14.53 +1.47% Closed · 04/09"}).value, 14.53);
@@ -68,14 +68,15 @@ test("accepts only a complete validated six-source snapshot for scheduled delive
   assert.equal(isCompleteResults({ ...snapshot, ahr999:{ ...snapshot.ahr999, date:"" } }), false);
 });
 
-test("formats daily, weekly and monthly comparisons only against valid source-matched records", () => {
+test("formats daily, weekly and monthly comparisons from each period's start, end and range", () => {
   const current = Object.fromEntries(Object.entries(SOURCES).map(([key, source]) => [key, { value:key === "ahr999" ? 0.5 : 20, display:key === "ahr999" ? "0.5000" : key === "buffett" ? "20.0%" : "20.0", date:"2026-09-16", source }]));
   const prior = structuredClone(current);
   prior.cape = { ...prior.cape, value:22, display:"22.0" };
   assert.equal(comparisonText("cape", current.cape, prior.cape), "较上次有效数据：-2.0（-9.1%）");
-  assert.match(comparisonSummary(current, prior, "本周变化（较上周一）"), /CAPE -2.0（-9.1%）/);
-  const report = formatReport(current, new Date("2026-09-16T00:00:00Z"), { previous:prior, weekly:prior, monthly:prior });
-  assert.match(report, /本周变化（较上周一）/);
-  assert.match(report, /本月变化（较上月1日）/);
+  const period = { startDay:"2026-09-08", endDay:"2026-09-15", items:Object.fromEntries(Object.keys(SOURCES).map(key => [key, { start:prior[key], end:current[key], low:current[key], high:prior[key] }])) };
+  assert.match(periodSummary(period, "上周整体变化"), /CAPE：22.0 → 20.0｜-2.0（-9.1%）｜区间 20.0–22.0/);
+  const report = formatReport(current, new Date("2026-09-16T00:00:00Z"), { previous:prior, weekly:period, monthly:period });
+  assert.match(report, /【上周整体变化】/);
+  assert.match(report, /【上月整体变化】/);
   assert.ok(report.length < 4096);
 });

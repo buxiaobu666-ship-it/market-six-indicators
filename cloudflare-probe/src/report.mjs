@@ -104,9 +104,19 @@ export function comparisonText(key, current, baseline, label = "较上次有效�
 
 const SHORT_NAMES = { vix:"VIX", vxn:"VXN", cape:"CAPE", ndxPe:"纳指PE", ahr999:"AHR999", buffett:"巴菲特" };
 
-export function comparisonSummary(results, baseline, label) {
-  if (!baseline || !isCompleteResults(baseline)) return `${label}：上期没有完整成功记录，暂不比较。`;
-  return `${label}：${Object.keys(SOURCES).map(key => `${SHORT_NAMES[key]} ${comparisonText(key, results[key], baseline[key], "").replace(/^：/, "")}`).join("；")}`;
+function displayedValue(key, item) {
+  return `${Number(item.value).toFixed(precision(item))}${key === "buffett" ? "%" : ""}`;
+}
+
+export function periodSummary(period, label) {
+  if (!period || !Object.keys(period.items || {}).length) return `【${label}】\n上期没有足够的有效网页数据，暂不汇总。`;
+  const lines = Object.keys(SOURCES).map(key => {
+    const item = period.items[key];
+    if (!item) return `${SHORT_NAMES[key]}：上期没有足够的有效网页数据`;
+    const change = comparisonText(key, item.end, item.start, "").replace(/^：/, "");
+    return `${SHORT_NAMES[key]}：${displayedValue(key, item.start)} → ${displayedValue(key, item.end)}｜${change}｜区间 ${displayedValue(key, item.low)}–${displayedValue(key, item.high)}`;
+  });
+  return `【${label}】\n统计周期：${period.startDay} 至 ${period.endDay}\n${lines.join("\n")}`;
 }
 
 export function beijingDay(now = new Date()) {
@@ -154,8 +164,8 @@ export function formatReport(results, now = new Date(), comparisons = {}) {
     return `${index + 1}. ${definition.name}\n当前值：${item.display}\n${change}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
   });
   const periodic = [
-    comparisons.weekly && comparisonSummary(results, comparisons.weekly, "本周变化（较上周一）"),
-    comparisons.monthly && comparisonSummary(results, comparisons.monthly, "本月变化（较上月1日）")
+    comparisons.weekly && periodSummary(comparisons.weekly, "上周整体变化"),
+    comparisons.monthly && periodSummary(comparisons.monthly, "上月整体变化")
   ].filter(Boolean);
   const report = `【市场六指标日报】${generated}（北京时间）\n\n${summaryLine(results, comparisons.previous)}${periodic.length ? `\n\n${periodic.join("\n")}` : ""}\n\n${sections.join("\n\n")}\n\n说明：变化均与同一指定网页的成功读取记录比较；网页数据日期不更新时，不将其伪装成新数据。风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
   if (report.length > 4096) throw new Error(`日报长度${report.length}超过Telegram单条消息限制`);
