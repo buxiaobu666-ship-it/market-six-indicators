@@ -67,8 +67,13 @@ export function parseAhr999(text) {
 }
 
 export function parseBuffett(text) {
-  const match = required(text, /CURRENT DATA[\s\S]{0,300}?BUFFETT INDICATOR\s*([0-9]+(?:\.[0-9]+)?)%[\s\S]{0,260}?As of\s*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i, "巴菲特指标");
-  return { value:number(match[1],"巴菲特指标"), display:`${match[1]}%`, date:match[2], source:SOURCES.buffett };
+  const cleaned = clean(text);
+  const currentCard = cleaned.match(/As of\s*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}),?\s+the Buffett Indicator stands at\s*([0-9]+(?:\.[0-9]+)?)%/i);
+  const legacyCard = cleaned.match(/CURRENT DATA[\s\S]{0,300}?BUFFETT INDICATOR\s*([0-9]+(?:\.[0-9]+)?)%[\s\S]{0,260}?As of\s*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})/i);
+  const value = currentCard?.[2] ?? legacyCard?.[1];
+  const date = currentCard?.[1] ?? legacyCard?.[2];
+  if (!value || !date) throw new Error("巴菲特指标页面未找到可验证的“当前值＋日期”组合");
+  return { value:number(value,"巴菲特指标"), display:`${value}%`, date, source:SOURCES.buffett };
 }
 
 function classify(value, ranges) {

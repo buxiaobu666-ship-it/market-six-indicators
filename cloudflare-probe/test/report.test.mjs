@@ -9,6 +9,7 @@ test("parses each current value together with its displayed date", () => {
   assert.equal(parseNasdaqPe("Nasdaq-100 P/E ratio: 31.5 The Nasdaq-100 trades at 31.5× trailing 12-month earnings (as of market close, Sep 4, 2026)").date, "Sep 4, 2026");
   assert.equal(parseAhr999("AHR999 — LATEST READING UTC 2026-09-05 0.5267 DCA ZONE").value, 0.5267);
   assert.equal(parseBuffett("CURRENT DATA TOTAL US STOCK MARKET VALUE $77.11T ANNUALIZED GDP $32.49T BUFFETT INDICATOR 237.4% The total value is 237.4% of GDP. As of September 4, 2026").display, "237.4%");
+  assert.equal(parseBuffett("As of September 26, 2026, the Buffett Indicator stands at 235.1%.").date, "September 26, 2026");
 });
 
 test("rejects missing date/value pairs", () => {
