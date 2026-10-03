@@ -169,11 +169,21 @@ export function formatReport(results, now = new Date(), comparisons = {}) {
     return `${index + 1}. ${definition.name}\n当前值：${item.display}\n${change}\n数据日期/更新时间：${item.date}\n参考范围：${rangeText(definition.ranges)}\n当前区间：${current.zone}\n风险等级：${current.risk}\n代表含义：${definition.meaning}\n适合行为：${definition.advice}\n原始网页：${item.source}`;
   });
   const periodic = [
-    comparisons.weekly && periodSummary(comparisons.weekly, "上周整体变化"),
-    comparisons.monthly && periodSummary(comparisons.monthly, "上月整体变化")
+    comparisons.weekly && periodSummary(comparisons.weekly, "上周整体变化")
   ].filter(Boolean);
   const report = `【市场六指标日报】${generated}（北京时间）\n\n${summaryLine(results, comparisons.previous)}${periodic.length ? `\n\n${periodic.join("\n")}` : ""}\n\n${sections.join("\n\n")}\n\n说明：变化均与同一指定网页的成功读取记录比较；网页数据日期不更新时，不将其伪装成新数据。风险分档为固定参考规则，不是网站评级，也不构成买卖指令。`;
   if (report.length > 4096) throw new Error(`日报长度${report.length}超过Telegram单条消息限制`);
+  return report;
+}
+
+export function formatMonthlyReport(period, now = new Date()) {
+  if (!period || !Object.keys(period.items || {}).length) throw new Error("上月没有足够的完整成功记录，禁止生成月度汇总");
+  const endResults = Object.fromEntries(Object.entries(period.items).map(([key, item]) => [key, item.end]));
+  if (!isCompleteResults(endResults)) throw new Error("上月月末六项数据不完整，禁止生成月度汇总");
+  const month = period.startDay.slice(0, 7).replace("-", "年") + "月";
+  const generated = new Intl.DateTimeFormat("zh-CN", { timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }).format(now);
+  const report = `【市场六指标月度汇总】${month}\n生成时间：${generated}（北京时间）\n\n月末执行判断：\n标普500：${entryStatus(endResults.cape.value)}｜CAPE ${endResults.cape.display}\n纳指100：${entryStatus(endResults.ndxPe.value)}｜PE ${endResults.ndxPe.display}\nBTC：${btcStatus(endResults.ahr999.value)}｜AHR999 ${endResults.ahr999.display}\n\n${periodSummary(period, "上月整体变化")}\n\n原始网页：\nVIX：${SOURCES.vix}\nVXN：${SOURCES.vxn}\n标普500 CAPE：${SOURCES.cape}\n纳指100 PE：${SOURCES.ndxPe}\nBTC AHR999：${SOURCES.ahr999}\n巴菲特指标：${SOURCES.buffett}\n\n说明：月度汇总仅使用上一个自然月内成功校验的指定网页记录；显示周期首末值、累计变化与最高／最低区间，不使用估算或替代来源。`;
+  if (report.length > 4096) throw new Error(`月度汇总长度${report.length}超过Telegram单条消息限制`);
   return report;
 }
 

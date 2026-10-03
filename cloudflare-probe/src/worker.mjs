@@ -1,5 +1,5 @@
 import { launch } from "@cloudflare/playwright";
-import { SOURCES, PARSERS, beijingDay, failureMessage, formatReport, clean, isCompleteResults } from "./report.mjs";
+import { SOURCES, PARSERS, beijingDay, failureMessage, formatMonthlyReport, formatReport, clean, isCompleteResults } from "./report.mjs";
 
 const CHAT_ID = "@LilcMarketBrief";
 const DELIVERY_SCHEDULE = ["08:00"];
@@ -105,11 +105,18 @@ function isMonday(day) {
   return new Date(`${day}T00:00:00Z`).getUTCDay() === 1;
 }
 
-function previousMonthFirst(day) {
+function previousMonth(day) {
   const [year, month] = day.split("-").map(Number);
   const priorYear = month === 1 ? year - 1 : year;
   const priorMonth = month === 1 ? 12 : month - 1;
-  return `${priorYear}-${String(priorMonth).padStart(2, "0")}-01`;
+  return `${priorYear}-${String(priorMonth).padStart(2, "0")}`;
+}
+
+function monthBounds(month) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const startDay = `${month}-01`;
+  const endDay = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+  return { startDay, endDay };
 }
 
 async function sentResults(env, day) {
@@ -143,7 +150,7 @@ async function periodStatistics(env, startDay, endDay, currentResults) {
   const days = daysBetween(startDay, endDay);
   const snapshots = await Promise.all(days.map(async day => ({
     day,
-    results:day === endDay ? currentResults : await sentResults(env, day)
+    results:day === endDay && currentResults ? currentResults : await sentResults(env, day)
   })));
   const complete = snapshots.filter(({results}) => isCompleteResults(results));
   if (complete.length < 2) return undefined;
@@ -161,8 +168,33 @@ async function periodStatistics(env, startDay, endDay, currentResults) {
 async function reportComparisons(env, day, currentResults) {
   const comparisons = { previous:await previousSuccessfulResults(env, day) };
   if (isMonday(day)) comparisons.weekly = await periodStatistics(env, offsetDay(day, -7), day, currentResults);
-  if (day.endsWith("-01")) comparisons.monthly = await periodStatistics(env, previousMonthFirst(day), day, currentResults);
   return comparisons;
+}
+
+async function executeMonthly(env, {month, force=false, notifyFailure=true} = {}) {
+  if (!/^\d{4}-\d{2}$/.test(month || "")) throw new Error("月度汇总月份必须为 YYYY-MM");
+  const key = `monthly:${month}`;
+  const previous = await env.REPORT_STATE.get(key, "json");
+  if (!force && previous?.status === "sent") return { ok:true, duplicate:true, month, messageId:previous.messageId };
+  const attempt = Number(previous?.attempt || 0) + 1;
+  await env.REPORT_STATE.put(key, JSON.stringify({ status:"running", attempt, startedAt:new Date().toISOString() }), { expirationTtl:3888000 });
+  try {
+    const { startDay, endDay } = monthBounds(month);
+    const period = await periodStatistics(env, startDay, endDay);
+    if (!period) throw new Error("上月没有足够的完整成功记录，无法生成独立月报");
+    const messageId = await sendTelegram(env, formatMonthlyReport(period));
+    await env.REPORT_STATE.put(key, JSON.stringify({ status:"sent", attempt, messageId, sentAt:new Date().toISOString(), period }), { expirationTtl:3888000 });
+    return { ok:true, month, attempt, messageId };
+  } catch (caught) {
+    let error = caught;
+    let failureNoticeId;
+    if (notifyFailure) {
+      try { failureNoticeId = await sendTelegram(env, `【市场六指标月度汇总未发送】${month}\n上月数据未全部通过指定网页校验，因此没有拼接残缺月报。失败原因：${clean(error.message)}`.slice(0,3900)); }
+      catch (sendError) { error = new Error(`${error.message}\n${sendError.message}`); }
+    }
+    await env.REPORT_STATE.put(key, JSON.stringify({ status:"failed", attempt, error:clean(error.message), failureNoticeId, failedAt:new Date().toISOString() }), { expirationTtl:3888000 });
+    throw error;
+  }
 }
 
 async function prepare(env) {
@@ -217,6 +249,23 @@ async function execute(env, {force=false, notifyFailure=true, usePrefetch=false}
   }
 }
 
+async function executeScheduled(env) {
+  const day = beijingDay();
+  let dailyResult;
+  let dailyError;
+  try {
+    dailyResult = await execute(env, {notifyFailure:true, usePrefetch:true});
+  } catch (error) {
+    dailyError = error;
+  }
+  if (day.endsWith("-01")) {
+    try { await executeMonthly(env, { month:previousMonth(day), notifyFailure:true }); }
+    catch { /* The monthly failure notice has already been sent; daily delivery still proceeds. */ }
+  }
+  if (dailyError) throw dailyError;
+  return dailyResult;
+}
+
 function authorized(request, env) {
   return Boolean(env.RUN_KEY) && request.headers.get("authorization") === `Bearer ${env.RUN_KEY}`;
 }
@@ -227,12 +276,19 @@ export default {
     if (request.method === "GET" && url.pathname === "/health") {
       return Response.json({ ok:true, service:"market-six-daily-report", schedule:DELIVERY_SCHEDULE.map(time => `${time} Beijing`), telegram:Boolean(env.TELEGRAM_BOT_TOKEN) });
     }
-    if (request.method !== "POST" || !["/run", "/validate"].includes(url.pathname)) return new Response("Not found", {status:404});
+    if (request.method !== "POST" || !["/run", "/validate", "/monthly"].includes(url.pathname)) return new Response("Not found", {status:404});
     if (!authorized(request, env)) return new Response("Unauthorized", {status:401});
     try {
       if (url.pathname === "/validate") {
         const results = await collectSix(env);
         return Response.json({ok:true, results, report:formatReport(results)});
+      }
+      if (url.pathname === "/monthly") {
+        return Response.json(await executeMonthly(env, {
+          month:url.searchParams.get("month"),
+          force:url.searchParams.get("force") === "1",
+          notifyFailure:url.searchParams.get("notify_failure") !== "0"
+        }));
       }
       return Response.json(await execute(env, {
         force:url.searchParams.get("force") === "1",
@@ -248,7 +304,7 @@ export default {
       return;
     }
     if (controller.cron === DELIVERY_CRON) {
-      ctx.waitUntil(execute(env, {notifyFailure:true, usePrefetch:true}));
+      ctx.waitUntil(executeScheduled(env));
     }
   }
 };

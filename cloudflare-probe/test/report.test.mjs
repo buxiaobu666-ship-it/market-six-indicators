@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatReport, failureMessage, isCompleteResults, comparisonText, periodSummary } from "../src/report.mjs";
+import { SOURCES, parseVix, parseVxn, parseCape, parseNasdaqPe, parseAhr999, parseBuffett, formatMonthlyReport, formatReport, failureMessage, isCompleteResults, comparisonText, periodSummary } from "../src/report.mjs";
 
 test("parses each current value together with its displayed date", () => {
   assert.equal(parseVix({quote:"14.53", header:"14.53 +1.47% Closed · 04/09"}).value, 14.53);
@@ -69,15 +69,24 @@ test("accepts only a complete validated six-source snapshot for scheduled delive
   assert.equal(isCompleteResults({ ...snapshot, ahr999:{ ...snapshot.ahr999, date:"" } }), false);
 });
 
-test("formats daily, weekly and monthly comparisons from each period's start, end and range", () => {
+test("formats daily and weekly comparisons from each period's start, end and range", () => {
   const current = Object.fromEntries(Object.entries(SOURCES).map(([key, source]) => [key, { value:key === "ahr999" ? 0.5 : 20, display:key === "ahr999" ? "0.5000" : key === "buffett" ? "20.0%" : "20.0", date:"2026-09-16", source }]));
   const prior = structuredClone(current);
   prior.cape = { ...prior.cape, value:22, display:"22.0" };
   assert.equal(comparisonText("cape", current.cape, prior.cape), "较上次有效数据：-2.0（-9.1%）");
   const period = { startDay:"2026-09-08", endDay:"2026-09-15", items:Object.fromEntries(Object.keys(SOURCES).map(key => [key, { start:prior[key], end:current[key], low:current[key], high:prior[key] }])) };
   assert.match(periodSummary(period, "上周整体变化"), /CAPE：22.0 → 20.0｜-2.0（-9.1%）｜区间 20.0–22.0/);
-  const report = formatReport(current, new Date("2026-09-16T00:00:00Z"), { previous:prior, weekly:period, monthly:period });
+  const report = formatReport(current, new Date("2026-09-16T00:00:00Z"), { previous:prior, weekly:period });
   assert.match(report, /【上周整体变化】/);
-  assert.match(report, /【上月整体变化】/);
+  assert.doesNotMatch(report, /【上月整体变化】/);
+  assert.ok(report.length < 4096);
+});
+
+test("formats a standalone monthly report from a completed calendar month", () => {
+  const results = Object.fromEntries(Object.entries(SOURCES).map(([key, source]) => [key, { value:key === "ahr999" ? 0.5 : 20, display:key === "ahr999" ? "0.5000" : key === "buffett" ? "20.0%" : "20.0", date:"2026-09-30", source }]));
+  const period = { startDay:"2026-09-01", endDay:"2026-09-30", items:Object.fromEntries(Object.keys(SOURCES).map(key => [key, { start:results[key], end:results[key], low:results[key], high:results[key] }])) };
+  const report = formatMonthlyReport(period, new Date("2026-10-01T00:00:00Z"));
+  assert.match(report, /【市场六指标月度汇总】2026年09月/);
+  assert.match(report, /统计周期：2026-09-01 至 2026-09-30/);
   assert.ok(report.length < 4096);
 });
