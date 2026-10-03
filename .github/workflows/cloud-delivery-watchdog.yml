@@ -8,6 +8,24 @@ on:
     - cron: "10 4 * * *"
     - cron: "10 10 * * *"
   workflow_dispatch:
+    inputs:
+      report_kind:
+        description: "Choose the report to send manually"
+        required: true
+        type: choice
+        options:
+          - daily
+          - monthly
+        default: daily
+      report_month:
+        description: "Required for monthly: completed calendar month in YYYY-MM"
+        required: false
+        type: string
+      force_resend:
+        description: "Resend even if this report was already recorded as sent"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,8 +42,22 @@ jobs:
       - name: Verify delivery and trigger one cloud backup run
         env:
           REPORT_RUN_KEY: ${{ secrets.CLOUDFLARE_REPORT_RUN_KEY }}
+          REPORT_KIND: ${{ inputs.report_kind || 'daily' }}
+          REPORT_MONTH: ${{ inputs.report_month }}
+          FORCE_RESEND: ${{ inputs.force_resend || 'false' }}
         run: |
           test -n "$REPORT_RUN_KEY"
+          if [ "$REPORT_KIND" = "monthly" ]; then
+            case "$REPORT_MONTH" in
+              ????-??) report_url="https://market-six-daily-report.market-six-cloudflare-probe.workers.dev/monthly?month=${REPORT_MONTH}&notify_failure=0" ;;
+              *) echo "For a monthly summary, enter report_month as YYYY-MM." >&2; exit 2 ;;
+            esac
+          else
+            report_url='https://market-six-daily-report.market-six-cloudflare-probe.workers.dev/run?notify_failure=0'
+          fi
+          if [ "$FORCE_RESEND" = "true" ]; then
+            report_url="${report_url}&force=1"
+          fi
           set +e
           http_code=$(curl --silent --show-error \
             --retry 3 --retry-all-errors --retry-delay 5 \
@@ -33,11 +65,11 @@ jobs:
             --output response.json --write-out '%{http_code}' \
             --request POST \
             --header "Authorization: Bearer $REPORT_RUN_KEY" \
-            'https://market-six-daily-report.market-six-cloudflare-probe.workers.dev/run?notify_failure=0')
+            "$report_url")
           curl_status=$?
           set -e
           if [ "$curl_status" -eq 0 ] && [ "$http_code" = "200" ] && jq -e '.ok == true' response.json >/dev/null; then
-            jq '{ok, day, duplicate, messageId, attempt}' response.json
+            jq '{ok, day, month, duplicate, messageId, attempt}' response.json
             exit 0
           fi
           echo "Cloudflare backup run failed (curl=$curl_status, HTTP=$http_code)." >&2
